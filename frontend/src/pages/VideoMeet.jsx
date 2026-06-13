@@ -122,6 +122,12 @@ export default function VideoMeetComponent() {
   const [pollQuestion, setPollQuestion] = useState('');
   const [pollOptions, setPollOptions] = useState(['', '']);
   const [decisionText, setDecisionText] = useState('');
+
+  // Reactions state
+  const [reactions, setReactions] = useState([]);
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+
+  const EMOJIS = ['😂', '👍', '❤️', '😮', '😢', '🎉', '🔥', '👏'];
   
   // Generate unique user ID for this session
   const [uniqueUserId] = useState(() => {
@@ -818,6 +824,11 @@ const enrollFace = async () => {
         setDecisions(prev => [...prev, decision]);
       });
 
+      socketRef.current.on('reaction-received', (r) => {
+        setReactions(prev => [...prev, r]);
+        setTimeout(() => setReactions(prev => prev.filter(x => x.id !== r.id)), 2000);
+      });
+
       socketRef.current.on('chat-message', addMessage);
       socketRef.current.on('user-left', id => {
         console.log('👋 User left:', id);
@@ -1178,6 +1189,19 @@ const handleVideo = () => {
 
   const toggleSidebar = () => {
     setSidebarOpen(prev => !prev);
+  };
+
+  const sendReaction = (emoji) => {
+    socketRef.current.emit('send-reaction', {
+      meetingId: meetingCode,
+      emoji,
+      from: username
+    });
+    setShowEmojiPicker(false);
+  };
+
+  const toggleEmojiPicker = () => {
+    setShowEmojiPicker(prev => !prev);
   };
 
   const getStatusColor = (status) => {
@@ -1598,6 +1622,15 @@ const handleVideo = () => {
                 </div>
               </div>
             </aside>
+
+            {/* Floating Reaction Overlay */}
+            {reactions.length > 0 && (
+              <div className={styles.reactionOverlay}>
+                {reactions.map(r => (
+                  <span key={r.id} className={styles.reactionFloat}>{r.emoji}</span>
+                ))}
+              </div>
+            )}
           </main>
 
           {/* BOTTOM CONTROL BAR */}
@@ -1618,8 +1651,17 @@ const handleVideo = () => {
                   {screen ? <StopScreenShareIcon /> : <ScreenShareIcon />}
                 </button>
               )}
-              <button className={styles.controlButton} title="Reactions">
+              <button onClick={toggleEmojiPicker} className={styles.controlButton} title="Reactions" style={{ position: 'relative' }}>
                 <SentimentSatisfiedIcon />
+                {showEmojiPicker && (
+                  <div className={styles.emojiPicker}>
+                    {EMOJIS.map((emoji, i) => (
+                      <button key={i} className={styles.emojiOption} onClick={() => sendReaction(emoji)}>
+                        {emoji}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </button>
               <button onClick={handleEndCall} className={styles.leaveButton} title={isMeetingOwner ? "End Meeting & Generate Report" : "Leave Meeting"}>
                 <CallEndIcon />

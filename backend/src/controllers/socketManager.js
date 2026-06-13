@@ -333,6 +333,11 @@ export const connectToSocket = (server) => {
             console.log(`📝 Decision recorded in ${meetingId}: "${text}" by ${proposedBy}`);
         });
 
+        // Send a reaction (emoji)
+        socket.on("send-reaction", ({ meetingId, emoji, from }) => {
+            io.to(meetingId).emit("reaction-received", { emoji, from, id: Date.now() });
+        });
+
         // ==================== END NEW EVENTS ====================
 
         // User disconnects
