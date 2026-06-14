@@ -12,6 +12,7 @@ import { Face } from "../models/face.model.js";
 import { Attendance } from "../models/attendance.model.js";
 
 import { Server } from "socket.io";
+import OpenAI from "openai";
 
 // DATA STRUCTURES TO TRACK ACTIVE CALLS
 // connections: { 'meeting-code': [{socketId, userId, totalTime, verifiedTime}] }
@@ -33,6 +34,108 @@ let meetingStartTimes = {}; // Tracks when each meeting started
 let polls = {};
 // decisions: { 'meeting-code': [{ id, text, proposedBy, timestamp }] }
 let decisions = {};
+
+/**
+ * Extract structured summary from transcript entries.
+ * Uses multi-language keyword detection to highlight decisions and action items.
+ */
+function extractSummary(entries) {
+    if (!entries || entries.length === 0) {
+        return { overview: 'Not enough transcript data to generate a summary.', keyTopics: [], decisions: [], actionItems: [] };
+    }
+
+    // Combine all text and split into sentences (handles multiple languages)
+    const fullText = entries.map(e => e.text).join(' ');
+    const sentences = fullText
+        .split(/(?<=[.!?।？！。])\s+/)
+        .map(s => s.trim())
+        .filter(s => s.length > 10);
+
+    if (sentences.length === 0) {
+        return { overview: 'Not enough transcript data to generate a summary.', keyTopics: [], decisions: [], actionItems: [] };
+    }
+
+    // Multi-language decision detection patterns
+    const decisionPatterns = [
+        /decided|agreed|approved|confirmed|finalized|consensus|voted|we('| a)ll go with|settled on|let's do it|good to go/i,
+        /निर्णय|सहमत|मंजूर|तय/i,
+        /decid[ii]|acord[oó]|aprobad[o]|confirmad[o]/i,
+        /d[cé]cid[ée]|convenu|approuv[ée]/i,
+        /entschieden|vereinbart|zugestimmt|genehmigt/i,
+        /决定|同意|批准|确认|通过/i,
+        /決定|同意|承認/i,
+        /decidiu|acordou|aprovado/i,
+        /решили|согласовали|утвердили/i,
+        /قرر|وافق|تمت\s*الموافقة/i
+    ];
+
+    // Multi-language task/action detection patterns
+    const taskPatterns = [
+        /action\s*item|assigned\s*to|will\s*handle|will\s*take\s*care|task\s*for|responsible\s*for|to[\s-]?do|follow\s*up|need\s*to|will\s*work\s*on|going\s*to|i('| a)m going|plan\s*to/i,
+        /जिम्मेदारी|कार्य|काम/i,
+        /tarea|asignad[o]|responsable/i,
+        /t[âa]che|assign[ée]|responsable/i,
+        /aufgabe|zugewiesen|verantwortlich/i,
+        /任务|分配给|负责|需要|要做的/i,
+        /タスク|担当|責任/i,
+        /tarefa|atribu[ií]d[oa]|respons[áa]vel/i,
+        /задача|назначено|ответственный/i,
+        /مهمة|مسؤول/i
+    ];
+
+    // Score each sentence
+    const wordFreq = {};
+    sentences.forEach(s => {
+        const words = s.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+        words.forEach(w => { wordFreq[w] = (wordFreq[w] || 0) + 1; });
+    });
+
+    const scored = sentences.map((s, i) => {
+        let score = 0;
+        // Position bonus (earlier = more important to meeting context)
+        score += Math.max(0, 5 - i * 0.5);
+        // Word frequency bonus (common topics)
+        const words = s.toLowerCase().split(/\s+/);
+        words.forEach(w => { if (wordFreq[w] > 1) score += 0.5; });
+        // Decision keyword bonus
+        const hasDecision = decisionPatterns.some(p => p.test(s));
+        if (hasDecision) score += 3;
+        // Task keyword bonus
+        const hasTask = taskPatterns.some(p => p.test(s));
+        if (hasTask) score += 3;
+
+        return { text: s, score, hasDecision, hasTask };
+    });
+
+    // Deduplicate and rank
+    const ranked = scored.sort((a, b) => b.score - a.score);
+    const unique = [];
+    const seen = new Set();
+    ranked.forEach(s => {
+        const key = s.text.substring(0, 40);
+        if (!seen.has(key)) { seen.add(key); unique.push(s); }
+    });
+
+    const overview = unique.slice(0, 3).map(s => s.text).join(' ');
+    const decisions = [...new Set(unique.filter(s => s.hasDecision).map(s => s.text))];
+    const actionItems = [...new Set(unique.filter(s => s.hasTask).map(s => s.text))];
+
+    // Extract key topics from recurring bigrams
+    const bigrams = {};
+    sentences.forEach(s => {
+        const words = s.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+        for (let i = 0; i < words.length - 1; i++) {
+            const bg = `${words[i]} ${words[i + 1]}`;
+            bigrams[bg] = (bigrams[bg] || 0) + 1;
+        }
+    });
+    const keyTopics = Object.entries(bigrams)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5)
+        .map(([text]) => text.charAt(0).toUpperCase() + text.slice(1));
+
+    return { overview, keyTopics, decisions, actionItems };
+}
 
 export const connectToSocket = (server) => {
     // Initialize Socket.io server with CORS configuration
@@ -336,6 +439,64 @@ export const connectToSocket = (server) => {
         // Send a reaction (emoji)
         socket.on("send-reaction", ({ meetingId, emoji, from }) => {
             io.to(meetingId).emit("reaction-received", { emoji, from, id: Date.now() });
+        });
+
+        // ==================== TRANSCRIPT & SUMMARY ====================
+
+        // Relay live transcript entry to all participants
+        socket.on("transcript-entry", ({ meetingId, text, speaker, lang, timestamp }) => {
+            io.to(meetingId).emit("transcript-entry", { text, speaker, lang, timestamp });
+            console.log(`📝 Transcript [${meetingId}] ${speaker}: ${text.substring(0, 60)}`);
+        });
+
+        // Generate AI summary from transcript entries
+        socket.on("generate-summary", async ({ meetingId, transcriptEntries }) => {
+            console.log(`🤖 Generating AI summary for meeting: ${meetingId}`);
+
+            const openaiKey = process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY !== "your_openai_api_key_here"
+                ? process.env.OPENAI_API_KEY
+                : null;
+
+            if (openaiKey && transcriptEntries && transcriptEntries.length > 0) {
+                try {
+                    const openai = new OpenAI({ apiKey: openaiKey });
+                    const transcript = transcriptEntries
+                        .map(e => `[${e.speaker || 'Speaker'}]: ${e.text}`)
+                        .join('\n');
+
+                    const response = await openai.chat.completions.create({
+                        model: "gpt-3.5-turbo",
+                        messages: [
+                            {
+                                role: "system",
+                                content: `You are a meeting summarizer. Given the transcript below, produce a JSON object with exactly these fields:
+{
+  "overview": "2-3 sentence summary of the discussion",
+  "keyTopics": ["topic1", "topic2", ...],
+  "decisions": ["sentence describing a decision made", ...],
+  "actionItems": ["sentence describing a task assigned", ...]
+}
+Highlight important decisions made and action items assigned. If none, return empty arrays. Transcript:`
+                            },
+                            { role: "user", content: transcript }
+                        ],
+                        response_format: { type: "json_object" },
+                        temperature: 0.3,
+                        max_tokens: 1024
+                    });
+
+                    const summary = JSON.parse(response.choices[0].message.content);
+                    io.to(meetingId).emit("summary-generated", summary);
+                    console.log(`📋 GPT summary generated for ${meetingId}: ${summary.overview?.substring(0, 80)}...`);
+                    return;
+                } catch (err) {
+                    console.error('GPT summary error, falling back to keyword extraction:', err.message);
+                }
+            }
+
+            const summary = extractSummary(transcriptEntries);
+            io.to(meetingId).emit("summary-generated", summary);
+            console.log(`📋 Keyword summary generated for ${meetingId}: ${summary.overview?.substring(0, 80)}...`);
         });
 
         // ==================== END NEW EVENTS ====================

@@ -127,6 +127,21 @@ export default function VideoMeetComponent() {
   const [reactions, setReactions] = useState([]);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
 
+  // Transcript & Summary state
+  const [transcript, setTranscript] = useState([]);
+  const [isRecording, setIsRecording] = useState(false);
+  const [interimText, setInterimText] = useState('');
+  const [transcriptLang, setTranscriptLang] = useState('en-US');
+  const [aiSummary, setAiSummary] = useState(null);
+  const [showSummaryModal, setShowSummaryModal] = useState(false);
+  const [generatingSummary, setGeneratingSummary] = useState(false);
+  const [transcriptError, setTranscriptError] = useState('');
+  const [manualTranscriptText, setManualTranscriptText] = useState('');
+  const mediaRecorderRef = useRef(null);
+  const isRecordingRef = useRef(false);
+  const flushTimerRef = useRef(null);
+  const audioChunksRef = useRef([]);
+
   // Ensure local video element gets srcObject whenever video is on
   useEffect(() => {
     if (video && localVideoref.current && window.localStream) {
@@ -836,6 +851,16 @@ const enrollFace = async () => {
         setTimeout(() => setReactions(prev => prev.filter(x => x.id !== r.id)), 2000);
       });
 
+      socketRef.current.on('transcript-entry', ({ text, speaker, lang, timestamp }) => {
+        setTranscript(prev => [...prev, { text, speaker, lang, timestamp }]);
+      });
+
+      socketRef.current.on('summary-generated', (summary) => {
+        setAiSummary(summary);
+        setGeneratingSummary(false);
+        setShowSummaryModal(true);
+      });
+
       socketRef.current.on('chat-message', addMessage);
       socketRef.current.on('user-left', id => {
         console.log('👋 User left:', id);
@@ -1033,6 +1058,131 @@ const enrollFace = async () => {
     });
     setDecisionText('');
   };
+
+  // ============= TRANSCRIPTION FUNCTIONS =============
+
+  const startTranscription = () => {
+    setTranscriptError('');
+    if (!window.localStream || !window.localStream.getAudioTracks().length) {
+      setTranscriptError('No microphone detected. Join the meeting first.');
+      return;
+    }
+
+    setIsRecording(true);
+    isRecordingRef.current = true;
+    audioChunksRef.current = [];
+
+    let mediaRecorder;
+    try {
+      mediaRecorder = new MediaRecorder(window.localStream);
+    } catch (e) {
+      setTranscriptError('Audio recording not supported in this browser.');
+      setIsRecording(false);
+      isRecordingRef.current = false;
+      return;
+    }
+
+    mediaRecorderRef.current = mediaRecorder;
+
+    mediaRecorder.ondataavailable = (e) => {
+      if (e.data.size > 0) audioChunksRef.current.push(e.data);
+    };
+
+    mediaRecorder.onerror = () => {
+      setTranscriptError('Audio recording error occurred.');
+      setIsRecording(false);
+      isRecordingRef.current = false;
+      clearInterval(flushTimerRef.current);
+    };
+
+    try {
+      mediaRecorder.start();
+    } catch (e) {
+      setTranscriptError('Could not start audio recording. Try manual entry below.');
+      setIsRecording(false);
+      isRecordingRef.current = false;
+      return;
+    }
+
+    // Flush audio chunks to backend Whisper every 5 seconds
+    flushTimerRef.current = setInterval(async () => {
+      mediaRecorder.requestData();
+      if (audioChunksRef.current.length === 0) return;
+      const batch = audioChunksRef.current.splice(0);
+      const blob = new Blob(batch, { type: mediaRecorder.mimeType });
+
+      console.log(`📊 Audio blob: ${(blob.size / 1024).toFixed(1)}KB, type: ${blob.type}, chunks: ${batch.length}`);
+
+      try {
+        const formData = new FormData();
+        formData.append('audio', blob, `audio-${Date.now()}.webm`);
+        const res = await fetch(`${server}/api/transcribe`, { method: 'POST', body: formData });
+        if (!res.ok) {
+          if (res.status === 503) {
+            setTranscriptError('OpenAI API key not configured. Use manual entry below.');
+            stopTranscription();
+          } else {
+            // Try to read the error body from backend
+            const errorBody = await res.text();
+            let errorMsg = `Transcription failed (${res.status})`;
+            try {
+              const parsed = JSON.parse(errorBody);
+              if (parsed.error) errorMsg = parsed.error;
+            } catch (e) {}
+            console.error('❌ Transcribe error:', errorMsg);
+            setTranscriptError(errorMsg + '. Try manual entry below.');
+            stopTranscription();
+          }
+          return;
+        }
+        const data = await res.json();
+        if (data.text && data.text.trim()) {
+          const entry = { text: data.text.trim(), speaker: username || 'Anonymous', lang: 'auto', timestamp: Date.now() };
+          setTranscript(prev => [...prev, entry]);
+          socketRef.current?.emit('transcript-entry', { meetingId: meetingCode, ...entry });
+        }
+      } catch (err) {
+        console.error('Flush error:', err);
+      }
+    }, 5000);
+  };
+
+  const stopTranscription = () => {
+    setIsRecording(false);
+    isRecordingRef.current = false;
+    clearInterval(flushTimerRef.current);
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.requestData();
+      mediaRecorderRef.current.stop();
+    }
+    audioChunksRef.current = [];
+    mediaRecorderRef.current = null;
+  };
+
+  const toggleRecording = () => {
+    if (isRecording) { stopTranscription(); }
+    else { startTranscription(); }
+  };
+
+  const addManualEntry = () => {
+    const text = manualTranscriptText.trim();
+    if (!text) return;
+    const entry = { text, speaker: username || 'Anonymous', lang: 'manual', timestamp: Date.now() };
+    setTranscript(prev => [...prev, entry]);
+    socketRef.current?.emit('transcript-entry', { meetingId: meetingCode, ...entry });
+    setManualTranscriptText('');
+  };
+
+  const requestSummary = () => {
+    if (transcript.length === 0 || generatingSummary) return;
+    setGeneratingSummary(true);
+    socketRef.current?.emit('generate-summary', {
+      meetingId: meetingCode,
+      transcriptEntries: transcript
+    });
+  };
+
+  // ============= END TRANSCRIPTION =============
 
   const addPollOption = () => {
     setPollOptions(prev => [...prev, '']);
@@ -1451,6 +1601,9 @@ const handleVideo = async () => {
                 <button onClick={() => handleTabChange('polls')} className={`${styles.tabButton} ${activeTab === 'polls' ? styles.tabActive : ''}`}>
                   Polls
                 </button>
+                <button onClick={() => handleTabChange('transcript')} className={`${styles.tabButton} ${activeTab === 'transcript' ? styles.tabActive : ''}`}>
+                  Transcript
+                </button>
                 <button onClick={() => handleTabChange('info')} className={`${styles.tabButton} ${activeTab === 'info' ? styles.tabActive : ''}`}>
                   Info
                 </button>
@@ -1640,7 +1793,91 @@ const handleVideo = async () => {
                   </div>
                 )}
 
-                {/* TAB 3: INFO */}
+                {/* TAB 5: TRANSCRIPT */}
+                {activeTab === 'transcript' && (
+                  <div className={styles.transcriptPanel}>
+                    <div className={styles.transcriptControls}>
+                      <button
+                        className={`${styles.recToggle} ${isRecording ? styles.recToggleRecording : ''}`}
+                        onClick={toggleRecording}
+                      >
+                        {isRecording ? '🔴 Stop' : '⚪ Start'}
+                      </button>
+                      <select
+                        className={styles.langSelect}
+                        value={transcriptLang}
+                        onChange={e => setTranscriptLang(e.target.value)}
+                        disabled={isRecording}
+                      >
+                        <option value="en-US">English</option>
+                        <option value="hi-IN">हिन्दी</option>
+                        <option value="es-ES">Español</option>
+                        <option value="fr-FR">Français</option>
+                        <option value="de-DE">Deutsch</option>
+                        <option value="zh-CN">中文</option>
+                        <option value="ja-JP">日本語</option>
+                        <option value="ar-SA">العربية</option>
+                        <option value="pt-BR">Português</option>
+                        <option value="ru-RU">Русский</option>
+                      </select>
+                    </div>
+                    {transcriptError && (
+                      <div style={{ background: '#fdecea', color: '#b71c1c', padding: '8px 10px', borderRadius: 8, fontSize: 12, marginBottom: 4 }}>
+                        {transcriptError}
+                      </div>
+                    )}
+                    {transcriptError.includes('manual entry') && (
+                      <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
+                        <input
+                          style={{ flex: 1, padding: '6px 10px', border: '1px solid #c6c6cd', borderRadius: 8, fontSize: 12, outline: 'none' }}
+                          placeholder="Type what was said..."
+                          value={manualTranscriptText}
+                          onChange={e => setManualTranscriptText(e.target.value)}
+                          onKeyPress={e => e.key === 'Enter' && addManualEntry()}
+                        />
+                        <button onClick={addManualEntry} style={{ padding: '6px 12px', border: 'none', borderRadius: 8, background: '#645efb', color: 'white', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                          Add
+                        </button>
+                      </div>
+                    )}
+                    <div className={styles.transcriptList}>
+                      {transcript.length === 0 && !isRecording && (
+                        <p className={styles.emptyStateSmall}>No transcript yet. Press "Start" to record.</p>
+                      )}
+                      {transcript.map((entry, i) => (
+                        <div key={i} className={styles.transcriptEntry}>
+                          <div className={styles.transcriptEntryMeta}>
+                            <span className={styles.transcriptSpeaker}>{entry.speaker}</span>
+                          </div>
+                          <p className={styles.transcriptText}>{entry.text}</p>
+                        </div>
+                      ))}
+                      {isRecording && interimText && (
+                        <div className={styles.transcriptInterim}>
+                          <span className={styles.transcriptSpeaker}>{username}</span>
+                          <p className={styles.transcriptText}>{interimText}</p>
+                        </div>
+                      )}
+                    </div>
+                    <div className={styles.transcriptFooter}>
+                      <span className={styles.entryCount}>{transcript.length} entries</span>
+                      {aiSummary && (
+                        <div className={styles.summaryCard}>
+                          <p className={styles.summaryOverview}>{aiSummary.overview}</p>
+                        </div>
+                      )}
+                      <button
+                        className={styles.summaryButton}
+                        onClick={requestSummary}
+                        disabled={transcript.length === 0 || generatingSummary}
+                      >
+                        {generatingSummary ? 'Generating...' : 'Generate AI Summary'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* TAB 4: INFO */}
                 {activeTab === 'info' && (
                   <div className={styles.infoPanel}>
                     <div className={styles.infoRow}>
@@ -1931,6 +2168,59 @@ const handleVideo = async () => {
             sx={{ mt: 3, display: 'block', mx: 'auto' }}
           >
             Close & Exit Meeting
+          </Button>
+        </Box>
+      </Modal>
+
+      {/* AI Summary Modal */}
+      <Modal open={showSummaryModal} onClose={() => setShowSummaryModal(false)}>
+        <Box className={styles.summaryModal}>
+          <Typography variant="h5" gutterBottom fontWeight="bold">
+            📋 AI Meeting Summary
+          </Typography>
+          {aiSummary && (
+            <>
+              <Typography variant="body1" sx={{ mt: 2, mb: 2, lineHeight: 1.7 }}>
+                {aiSummary.overview}
+              </Typography>
+              {aiSummary.keyTopics?.length > 0 && (
+                <>
+                  <Typography variant="h6" sx={{ mt: 3, mb: 1, fontWeight: 600 }}>Key Topics</Typography>
+                  <ul style={{ paddingLeft: 20, lineHeight: 1.8 }}>
+                    {aiSummary.keyTopics.map((topic, i) => (
+                      <li key={i}><Typography variant="body2">{topic}</Typography></li>
+                    ))}
+                  </ul>
+                </>
+              )}
+              {aiSummary.decisions?.length > 0 && (
+                <>
+                  <Typography variant="h6" sx={{ mt: 3, mb: 1, fontWeight: 600 }}>⚡ Decisions Made</Typography>
+                  <ul style={{ paddingLeft: 20, lineHeight: 1.8 }}>
+                    {aiSummary.decisions.map((d, i) => (
+                      <li key={i}><Typography variant="body2" fontWeight={500}>{d}</Typography></li>
+                    ))}
+                  </ul>
+                </>
+              )}
+              {aiSummary.actionItems?.length > 0 && (
+                <>
+                  <Typography variant="h6" sx={{ mt: 3, mb: 1, fontWeight: 600 }}>✅ Action Items</Typography>
+                  <ul style={{ paddingLeft: 20, lineHeight: 1.8 }}>
+                    {aiSummary.actionItems.map((a, i) => (
+                      <li key={i}><Typography variant="body2">{a}</Typography></li>
+                    ))}
+                  </ul>
+                </>
+              )}
+            </>
+          )}
+          <Button
+            onClick={() => setShowSummaryModal(false)}
+            variant="contained"
+            sx={{ mt: 3, display: 'block', mx: 'auto' }}
+          >
+            Close
           </Button>
         </Box>
       </Modal>

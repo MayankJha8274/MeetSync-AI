@@ -88,6 +88,9 @@ app.get('/api/health', (req, res) => {
 app.use("/api/v1/users", userRoutes);
 // All attendance-related endpoints (reports, owner reports) are prefixed with /api/v1/attendance
 app.use("/api/v1/attendance", attendanceRoutes);
+// Speech-to-text transcription via Whisper
+import transcribeRoutes from "./routes/transcribe.js";
+app.use("/api/transcribe", transcribeRoutes);
 
 // SERVE FRONTEND STATIC FILES IN PRODUCTION
 // This serves the React build files when deployed
