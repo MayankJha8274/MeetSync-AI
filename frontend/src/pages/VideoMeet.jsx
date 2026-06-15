@@ -136,7 +136,7 @@ export default function VideoMeetComponent() {
   const [transcript, setTranscript] = useState([]);
   const [isRecording, setIsRecording] = useState(false);
   const [interimText, setInterimText] = useState('');
-  const [transcriptLang, setTranscriptLang] = useState('en-US');
+  const [transcriptLang, setTranscriptLang] = useState('en-IN');
   const [aiSummary, setAiSummary] = useState(null);
   const [showSummaryModal, setShowSummaryModal] = useState(false);
   const [generatingSummary, setGeneratingSummary] = useState(false);
@@ -151,6 +151,7 @@ export default function VideoMeetComponent() {
   const transformersPipelineRef = useRef(null);
   const speechStreamRef = useRef(null);
   const speechWatchdogRef = useRef(null);
+  const interimTimeoutRef = useRef(null);
   const permissionsPromiseRef = useRef(null);
 
   // Ensure local video element gets srcObject whenever video is on
@@ -1136,8 +1137,10 @@ const enrollFace = async () => {
         const result = event.results[i];
         if (result.isFinal) {
           const text = result[0].transcript.trim();
-          if (text) {
-            console.log('📝 Web Speech final:', text);
+          const confidence = result[0].confidence;
+          console.log(`📝 Web Speech: text="${text}" confidence=${confidence.toFixed(2)}`);
+          if (text && (confidence >= 0.4 || confidence === 0)) {
+            if (confidence === 0) console.warn('⚠️ Web Speech: confidence=0 (API unsupported), accepting result');
             const entry = { text, speaker: username || 'Anonymous', lang: 'auto', timestamp: Date.now() };
             setTranscript(prev => [...prev, entry]);
             socketRef.current?.emit('transcript-entry', { meetingId: meetingCode, ...entry });
@@ -1146,7 +1149,12 @@ const enrollFace = async () => {
           interim += result[0].transcript;
         }
       }
-      setInterimText(interim);
+      if (interimTimeoutRef.current) clearTimeout(interimTimeoutRef.current);
+      if (interim) {
+        interimTimeoutRef.current = setTimeout(() => setInterimText(interim), 400);
+      } else {
+        setInterimText('');
+      }
       rearmWatchdog();
     };
 
@@ -1297,6 +1305,11 @@ const enrollFace = async () => {
     if (speechWatchdogRef.current) {
       clearTimeout(speechWatchdogRef.current);
       speechWatchdogRef.current = null;
+    }
+
+    if (interimTimeoutRef.current) {
+      clearTimeout(interimTimeoutRef.current);
+      interimTimeoutRef.current = null;
     }
 
     if (recognitionRef.current) {
@@ -1987,7 +2000,8 @@ const handleVideo = async () => {
                         onChange={e => setTranscriptLang(e.target.value)}
                         disabled={isRecording}
                       >
-                        <option value="en-US">English</option>
+                        <option value="en-IN">English (India)</option>
+                        <option value="en-US">English (US)</option>
                         <option value="hi-IN">हिन्दी</option>
                         <option value="es-ES">Español</option>
                         <option value="fr-FR">Français</option>
