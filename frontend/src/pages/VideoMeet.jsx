@@ -1125,10 +1125,7 @@ const enrollFace = async () => {
       clearTimeout(speechWatchdogRef.current);
       speechWatchdogRef.current = setTimeout(() => {
         if (isRecordingRef.current && recognitionRef.current === recognition) {
-          console.error('❌ Web Speech: no results for 10s, switching to local model');
-          recognitionRef.current = null;
-          try { recognition.stop(); } catch (e) {}
-          startTransformers();
+          console.log('⏸️ Web Speech: silence detected (no speech for 10s)');
         }
       }, 10000);
     };
@@ -1160,10 +1157,8 @@ const enrollFace = async () => {
       }
 
       if (event.error === 'network') {
-        console.log('🔁 Web Speech network error — auto-fallback to Transformers.js');
+        console.log('🔁 Web Speech network error — restarting on next onend');
         clearTimeout(speechWatchdogRef.current);
-        recognitionRef.current = null;
-        startTransformers();
         return;
       }
 
@@ -1219,8 +1214,7 @@ const enrollFace = async () => {
       if (!transformersPipelineRef.current) {
         transformersPipelineRef.current = await pipeline(
           'automatic-speech-recognition',
-          'Xenova/whisper-tiny.en',
-          { quantized: true }
+          'Xenova/whisper-tiny.en'
         );
       }
 
@@ -1271,9 +1265,12 @@ const enrollFace = async () => {
     } catch (err) {
       console.error('❌ Transformers pipeline error:', err);
       setTranscriptLoading('');
-      setTranscriptError('Failed to load speech model. Try manual entry below.');
-      setIsRecording(false);
-      isRecordingRef.current = false;
+      setTranscriptError('Local speech model unavailable. Using browser speech.');
+      // Recovery: restart Web Speech instead of killing transcription
+      if (isRecordingRef.current) {
+        console.log('🔄 Transformers failed, restarting Web Speech...');
+        startWebSpeech();
+      }
     }
   };
 
@@ -2049,7 +2046,7 @@ const handleVideo = async () => {
                       <span className={styles.entryCount}>{transcript.length} entries</span>
                       {aiSummary && (
                         <div className={styles.summaryCard}>
-                          <p className={styles.summaryOverview}>{aiSummary.overview}</p>
+                          <p className={styles.summaryOverview}>{aiSummary.executiveSummary}</p>
                         </div>
                       )}
                       <button
@@ -2403,24 +2400,26 @@ const handleVideo = async () => {
           </Typography>
           {aiSummary && (
             <>
-              <Typography variant="body1" sx={{ mt: 2, mb: 2, lineHeight: 1.7 }}>
-                {aiSummary.overview}
-              </Typography>
-              {aiSummary.keyTopics?.length > 0 && (
+              {aiSummary.executiveSummary && (
+                <Typography variant="body1" sx={{ mt: 2, mb: 2, lineHeight: 1.7 }}>
+                  {aiSummary.executiveSummary}
+                </Typography>
+              )}
+              {aiSummary.keyDiscussionPoints?.length > 0 && (
                 <>
-                  <Typography variant="h6" sx={{ mt: 3, mb: 1, fontWeight: 600 }}>Key Topics</Typography>
+                  <Typography variant="h6" sx={{ mt: 3, mb: 1, fontWeight: 600 }}>Key Discussion Points</Typography>
                   <ul style={{ paddingLeft: 20, lineHeight: 1.8 }}>
-                    {aiSummary.keyTopics.map((topic, i) => (
-                      <li key={i}><Typography variant="body2">{topic}</Typography></li>
+                    {aiSummary.keyDiscussionPoints.map((point, i) => (
+                      <li key={i}><Typography variant="body2">{point}</Typography></li>
                     ))}
                   </ul>
                 </>
               )}
-              {aiSummary.decisions?.length > 0 && (
+              {aiSummary.decisionsTaken?.length > 0 && (
                 <>
-                  <Typography variant="h6" sx={{ mt: 3, mb: 1, fontWeight: 600 }}>⚡ Decisions Made</Typography>
+                  <Typography variant="h6" sx={{ mt: 3, mb: 1, fontWeight: 600 }}>⚡ Decisions Taken</Typography>
                   <ul style={{ paddingLeft: 20, lineHeight: 1.8 }}>
-                    {aiSummary.decisions.map((d, i) => (
+                    {aiSummary.decisionsTaken.map((d, i) => (
                       <li key={i}><Typography variant="body2" fontWeight={500}>{d}</Typography></li>
                     ))}
                   </ul>
@@ -2432,6 +2431,26 @@ const handleVideo = async () => {
                   <ul style={{ paddingLeft: 20, lineHeight: 1.8 }}>
                     {aiSummary.actionItems.map((a, i) => (
                       <li key={i}><Typography variant="body2">{a}</Typography></li>
+                    ))}
+                  </ul>
+                </>
+              )}
+              {aiSummary.risks?.length > 0 && (
+                <>
+                  <Typography variant="h6" sx={{ mt: 3, mb: 1, fontWeight: 600 }}>⚠️ Risks</Typography>
+                  <ul style={{ paddingLeft: 20, lineHeight: 1.8 }}>
+                    {aiSummary.risks.map((r, i) => (
+                      <li key={i}><Typography variant="body2">{r}</Typography></li>
+                    ))}
+                  </ul>
+                </>
+              )}
+              {aiSummary.nextSteps?.length > 0 && (
+                <>
+                  <Typography variant="h6" sx={{ mt: 3, mb: 1, fontWeight: 600 }}>➡️ Next Steps</Typography>
+                  <ul style={{ paddingLeft: 20, lineHeight: 1.8 }}>
+                    {aiSummary.nextSteps.map((n, i) => (
+                      <li key={i}><Typography variant="body2">{n}</Typography></li>
                     ))}
                   </ul>
                 </>

@@ -43,7 +43,7 @@ let raisedHands = {};
  */
 function extractSummary(entries) {
     if (!entries || entries.length === 0) {
-        return { overview: 'Not enough transcript data to generate a summary.', keyTopics: [], decisions: [], actionItems: [] };
+        return { executiveSummary: 'Not enough transcript data to generate a summary.', keyDiscussionPoints: [], decisionsTaken: [], actionItems: [], risks: [], nextSteps: [] };
     }
 
     // Combine all text and split into sentences (handles multiple languages)
@@ -54,7 +54,7 @@ function extractSummary(entries) {
         .filter(s => s.length > 10);
 
     if (sentences.length === 0) {
-        return { overview: 'Not enough transcript data to generate a summary.', keyTopics: [], decisions: [], actionItems: [] };
+        return { executiveSummary: 'Not enough transcript data to generate a summary.', keyDiscussionPoints: [], decisionsTaken: [], actionItems: [], risks: [], nextSteps: [] };
     }
 
     // Multi-language decision detection patterns
@@ -136,7 +136,7 @@ function extractSummary(entries) {
         .slice(0, 5)
         .map(([text]) => text.charAt(0).toUpperCase() + text.slice(1));
 
-    return { overview, keyTopics, decisions, actionItems };
+    return { executiveSummary: overview, keyDiscussionPoints: keyTopics, decisionsTaken: decisions, actionItems, risks: [], nextSteps: [] };
 }
 
 export const connectToSocket = (server) => {
@@ -505,23 +505,25 @@ export const connectToSocket = (server) => {
                                 role: "system",
                                 content: `You are a meeting summarizer. Given the transcript below, produce a JSON object with exactly these fields:
 {
-  "overview": "2-3 sentence summary of the discussion",
-  "keyTopics": ["topic1", "topic2", ...],
-  "decisions": ["sentence describing a decision made", ...],
-  "actionItems": ["sentence describing a task assigned", ...]
+  "executiveSummary": "2-3 sentence high-level summary of the entire meeting",
+  "keyDiscussionPoints": ["Bullet point of a main topic discussed", "..."],
+  "decisionsTaken": ["Decision that was made during the meeting", "..."],
+  "actionItems": ["Task assigned, include owner if mentioned", "..."],
+  "risks": ["Risk or concern raised during discussion", "..."],
+  "nextSteps": ["Follow-up action or next meeting plan", "..."]
 }
-Highlight important decisions made and action items assigned. If none, return empty arrays. Transcript:`
+If any field has no items, return an empty array for that field. Transcript:`
                             },
                             { role: "user", content: transcript }
                         ],
                         response_format: { type: "json_object" },
                         temperature: 0.3,
-                        max_tokens: 1024
+                        max_tokens: 2048
                     });
 
                     const summary = JSON.parse(response.choices[0].message.content);
                     io.to(meetingId).emit("summary-generated", summary);
-                    console.log(`📋 GPT summary generated for ${meetingId}: ${summary.overview?.substring(0, 80)}...`);
+                    console.log(`📋 GPT summary generated for ${meetingId}: ${summary.executiveSummary?.substring(0, 80)}...`);
                     return;
                 } catch (err) {
                     console.error('GPT summary error, falling back to keyword extraction:', err.message);
@@ -530,7 +532,7 @@ Highlight important decisions made and action items assigned. If none, return em
 
             const summary = extractSummary(transcriptEntries);
             io.to(meetingId).emit("summary-generated", summary);
-            console.log(`📋 Keyword summary generated for ${meetingId}: ${summary.overview?.substring(0, 80)}...`);
+            console.log(`📋 Keyword summary generated for ${meetingId}: ${summary.executiveSummary?.substring(0, 80)}...`);
         });
 
         // ==================== END NEW EVENTS ====================
