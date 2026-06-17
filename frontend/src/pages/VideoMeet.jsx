@@ -39,6 +39,8 @@ import SearchIcon from '@mui/icons-material/Search';
 import SentimentSatisfiedIcon from '@mui/icons-material/SentimentSatisfied';
 import PanToolIcon from '@mui/icons-material/PanTool';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import ChecklistIcon from '@mui/icons-material/Checklist';
+import PeopleIcon from '@mui/icons-material/People';
 import server from '../environment';
 
 const server_url = server;
@@ -123,6 +125,7 @@ export default function VideoMeetComponent() {
   const [liveAttendance, setLiveAttendance] = useState([]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [activeTab, setActiveTab] = useState('chat');
+  const [lastNonParticipantsTab, setLastNonParticipantsTab] = useState('chat');
   
   // Polls & Decisions state
   const [polls, setPolls] = useState([]);
@@ -148,13 +151,14 @@ export default function VideoMeetComponent() {
   const [transcript, setTranscript] = useState([]);
   const [isRecording, setIsRecording] = useState(false);
   const [interimText, setInterimText] = useState('');
-  const [transcriptLang, setTranscriptLang] = useState('en-IN');
+  const [transcriptLang, setTranscriptLang] = useState('en-US');
   const [aiSummary, setAiSummary] = useState(null);
   const [showSummaryModal, setShowSummaryModal] = useState(false);
   const [generatingSummary, setGeneratingSummary] = useState(false);
   const [transcriptError, setTranscriptError] = useState('');
   const [transcriptLoading, setTranscriptLoading] = useState('');
   const [manualTranscriptText, setManualTranscriptText] = useState('');
+  const [actionItems, setActionItems] = useState([]);
   const mediaRecorderRef = useRef(null);
   const isRecordingRef = useRef(false);
   const flushTimerRef = useRef(null);
@@ -164,6 +168,7 @@ export default function VideoMeetComponent() {
   const speechStreamRef = useRef(null);
   const speechWatchdogRef = useRef(null);
   const interimTimeoutRef = useRef(null);
+  const webSpeechTriedRef = useRef(false);
   const permissionsPromiseRef = useRef(null);
 
   // Ensure local video element gets srcObject whenever video is on
@@ -972,6 +977,15 @@ const enrollFace = async () => {
         setAiSummary(summary);
         setGeneratingSummary(false);
         setShowSummaryModal(true);
+        socketRef.current?.emit('get-action-items', { meetingId: meetingCode });
+      });
+
+      socketRef.current.on('action-items-list', (items) => {
+        setActionItems(items || []);
+      });
+
+      socketRef.current.on('action-item-updated', (item) => {
+        setActionItems(prev => prev.map(a => a._id === item._id ? item : a));
       });
 
       socketRef.current.on('hand-raise-update', (users) => {
@@ -1221,7 +1235,7 @@ const enrollFace = async () => {
           const text = result[0].transcript.trim();
           const confidence = result[0].confidence;
           console.log(`📝 Web Speech: text="${text}" confidence=${confidence.toFixed(2)}`);
-          if (text && (confidence >= 0.4 || confidence === 0)) {
+          if (text && (confidence >= 0.2 || confidence === 0)) {
             if (confidence === 0) console.warn('⚠️ Web Speech: confidence=0 (API unsupported), accepting result');
             const entry = { text, speaker: username || 'Anonymous', lang: 'auto', timestamp: Date.now() };
             setTranscript(prev => [...prev, entry]);
@@ -1257,6 +1271,33 @@ const enrollFace = async () => {
       isRecordingRef.current = false;
     };
 
+    let restartAttempts = 0;
+    const MAX_RESTART_ATTEMPTS = 5;
+    const tryRestart = () => {
+      if (!isRecordingRef.current || recognitionRef.current !== recognition) return;
+      if (restartAttempts >= MAX_RESTART_ATTEMPTS) {
+        console.error('❌ Web Speech: max restart attempts reached, stopping');
+        setIsRecording(false);
+        isRecordingRef.current = false;
+        return;
+      }
+      restartAttempts++;
+      const delay = Math.min(200 * Math.pow(2, restartAttempts - 1), 3000);
+      console.log(`🎤 Web Speech: restart attempt ${restartAttempts}/${MAX_RESTART_ATTEMPTS} in ${delay}ms`);
+      setTimeout(() => {
+        if (!isRecordingRef.current || recognitionRef.current !== recognition) return;
+        try {
+          recognition.start();
+          console.log('🎤 Web Speech: restarted');
+          restartAttempts = 0;
+          rearmWatchdog();
+        } catch (e) {
+          console.error('❌ Web Speech restart failed:', e.message);
+          tryRestart();
+        }
+      }, delay);
+    };
+
     recognition.onend = () => {
       console.log('🎤 Web Speech: ended');
       if (recognitionRef.current !== recognition) {
@@ -1264,13 +1305,7 @@ const enrollFace = async () => {
         return;
       }
       if (isRecordingRef.current) {
-        try {
-          recognition.start();
-          console.log('🎤 Web Speech: restarted');
-          rearmWatchdog();
-        } catch (e) {
-          console.error('❌ Web Speech restart failed:', e.message);
-        }
+        tryRestart();
       }
     };
 
@@ -1356,10 +1391,16 @@ const enrollFace = async () => {
       console.error('❌ Transformers pipeline error:', err);
       setTranscriptLoading('');
       setTranscriptError('Local speech model unavailable. Using browser speech.');
-      // Recovery: restart Web Speech instead of killing transcription
-      if (isRecordingRef.current) {
+      // Recovery: only retry Web Speech if we haven't already tried it
+      if (isRecordingRef.current && !webSpeechTriedRef.current) {
+        webSpeechTriedRef.current = true;
         console.log('🔄 Transformers failed, restarting Web Speech...');
         startWebSpeech();
+      } else if (isRecordingRef.current) {
+        console.log('🔄 Web Speech already attempted, stopping transcription');
+        setTranscriptError('Speech recognition unavailable. Try manual entry below.');
+        setIsRecording(false);
+        isRecordingRef.current = false;
       }
     }
   };
@@ -1368,6 +1409,7 @@ const enrollFace = async () => {
     setTranscriptError('');
     setIsRecording(true);
     isRecordingRef.current = true;
+    webSpeechTriedRef.current = false;
 
     const webSpeechStarted = await startWebSpeech();
     if (webSpeechStarted) {
@@ -1375,6 +1417,7 @@ const enrollFace = async () => {
       return;
     }
 
+    webSpeechTriedRef.current = true;
     console.log('🎤 Using Transformers.js (Firefox/Safari)');
     startTransformers();
   };
@@ -1434,6 +1477,14 @@ const enrollFace = async () => {
       meetingId: meetingCode,
       transcriptEntries: transcript
     });
+  };
+
+  const toggleActionItem = (id) => {
+    socketRef.current?.emit('toggle-action-item', { id, meetingId: meetingCode });
+  };
+
+  const refreshActionItems = () => {
+    socketRef.current?.emit('get-action-items', { meetingId: meetingCode });
   };
 
   // ============= END TRANSCRIPTION =============
@@ -1685,11 +1736,22 @@ const enrollFace = async () => {
 
   const handleTabChange = (tab) => {
     setActiveTab(tab);
+    if (tab !== 'participants') setLastNonParticipantsTab(tab);
     if (tab === 'chat') setNewMessages(0);
   };
 
   const toggleSidebar = () => {
     setSidebarOpen(prev => !prev);
+  };
+
+  const toggleParticipants = () => {
+    if (activeTab === 'participants') {
+      setActiveTab(lastNonParticipantsTab);
+    } else {
+      setLastNonParticipantsTab(activeTab);
+      setActiveTab('participants');
+      setSidebarOpen(true);
+    }
   };
 
   const sendReaction = (emoji) => {
@@ -1739,6 +1801,7 @@ const enrollFace = async () => {
     : participantCount <= 4 ? 2
     : participantCount <= 9 ? 3
     : 4;
+  const gridRows = Math.ceil(participantCount / gridCols);
 
   return (
     <div>
@@ -1874,8 +1937,8 @@ const enrollFace = async () => {
               <div className={styles.navDivider}></div>
               <span className={styles.navSubtitle}>Live Room</span>
             </div>
-            {videos.filter(v => v.userName).length > 0 && (
-              <div className={styles.topNavRight}>
+            <div className={styles.topNavRight}>
+              {videos.filter(v => v.userName).length > 0 && (
                 <div className={styles.avatarStack}>
                   {videos.filter(v => v.userName).slice(0, 2).map(v => (
                     <div key={v.socketId} className={styles.avatarImg} style={{ background: '#645efb', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontSize: '12px', fontWeight: 700 }}>
@@ -1886,8 +1949,14 @@ const enrollFace = async () => {
                     <div className={styles.avatarCount}>+{videos.filter(v => v.userName).length - 2}</div>
                   )}
                 </div>
-              </div>
-            )}
+              )}
+              <button onClick={toggleParticipants} className={`${styles.participantsToggleBtn} ${activeTab === 'participants' ? styles.participantsToggleActive : ''}`} title="Participants">
+                <PeopleIcon sx={{ fontSize: 20 }} />
+                {participantList.length > 0 && (
+                  <span className={styles.participantsToggleBadge}>{participantList.length}</span>
+                )}
+              </button>
+            </div>
           </header>
 
           {/* Join requests banner for meeting owner */}
@@ -1927,7 +1996,7 @@ const enrollFace = async () => {
           <main className={styles.mainContent}>
             {/* VIDEO GRID */}
             <section className={styles.videoGrid}
-              style={{ gridTemplateColumns: `repeat(${gridCols}, 1fr)` }}>
+              style={{ gridTemplateColumns: `repeat(${gridCols}, 1fr)`, gridTemplateRows: `repeat(${gridRows}, 1fr)` }}>
               {/* Local video */}
               <div className={`${styles.videoTile} ${isMeetingOwner ? styles.speakerGlow : ''}`}>
                 <video ref={localVideoref} autoPlay muted playsInline className={styles.videoElement}
@@ -2001,11 +2070,12 @@ const enrollFace = async () => {
                 <button onClick={() => handleTabChange('transcript')} className={`${styles.tabButton} ${activeTab === 'transcript' ? styles.tabActive : ''}`}>
                   Transcript
                 </button>
-                <button onClick={() => handleTabChange('participants')} className={`${styles.tabButton} ${activeTab === 'participants' ? styles.tabActive : ''}`}>
-                  Participants {raisedHandUsers.length > 0 && <span className={styles.handBadge}>{raisedHandUsers.length}</span>}
-                </button>
                 <button onClick={() => handleTabChange('info')} className={`${styles.tabButton} ${activeTab === 'info' ? styles.tabActive : ''}`}>
                   Info
+                </button>
+                <button onClick={() => { handleTabChange('actionItems'); refreshActionItems(); }} className={`${styles.tabButton} ${activeTab === 'actionItems' ? styles.tabActive : ''}`}>
+                  <ChecklistIcon sx={{ fontSize: 16, verticalAlign: 'middle', mr: 0.5 }} />
+                  Tasks {actionItems.filter(a => a.status === 'pending').length > 0 && <span className={styles.handBadge}>{actionItems.filter(a => a.status === 'pending').length}</span>}
                 </button>
               </nav>
 
@@ -2283,35 +2353,6 @@ const enrollFace = async () => {
                   </div>
                 )}
 
-                {/* TAB 4: PARTICIPANTS */}
-                {activeTab === 'participants' && (
-                  <div className={styles.participantsPanel}>
-                    <div className={styles.participantsHeader}>
-                      <span>{participantList.length} Participant{participantList.length !== 1 ? 's' : ''}</span>
-                    </div>
-                    {participantList.map(p => {
-                      const isLocal = p.userId === uniqueUserId;
-                      return (
-                        <div key={p.socketId || p.userId} className={styles.participantRow}>
-                          <div className={styles.participantAvatar}>
-                            {(p.userName || '?')[0].toUpperCase()}
-                          </div>
-                          <div className={styles.participantInfo}>
-                            <span className={styles.participantName}>
-                              {p.userName || 'Anonymous'}
-                              {isLocal && <span className={styles.participantYou}>(You)</span>}
-                            </span>
-                          </div>
-                          {p.hasRaisedHand && <span className={styles.participantHandIcon}>✋</span>}
-                        </div>
-                      );
-                    })}
-                    {participantList.length === 0 && (
-                      <div className={styles.participantsEmpty}>No participants yet</div>
-                    )}
-                  </div>
-                )}
-
                 {/* TAB 5: INFO */}
                 {activeTab === 'info' && (
                   <div className={styles.infoPanel}>
@@ -2359,6 +2400,79 @@ const enrollFace = async () => {
                         <li>Attendance is based on face detection percentage</li>
                       </ul>
                     </div>
+                  </div>
+                )}
+
+                {/* TAB 6: ACTION ITEMS */}
+                {activeTab === 'actionItems' && (
+                  <div className={styles.attendancePanel}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', marginBottom: 12 }}>
+                      <span style={{ fontWeight: 700, fontSize: 14, color: '#191c1e' }}>
+                        Action Items ({actionItems.length})
+                      </span>
+                      <button onClick={refreshActionItems} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#645efb', fontSize: 12, fontWeight: 600 }}>
+                        Refresh
+                      </button>
+                    </div>
+                    {actionItems.length === 0 ? (
+                      <p style={{ color: '#8a8fa8', textAlign: 'center', padding: '32px 16px', fontSize: 13 }}>
+                        No action items yet. Generate an AI summary from the Transcript tab to extract action items.
+                      </p>
+                    ) : (
+                      actionItems.map(item => (
+                        <div key={item._id} className={styles.actionItemCard}>
+                          <label className={styles.actionItemCheckbox}>
+                            <input
+                              type="checkbox"
+                              checked={item.status === 'completed'}
+                              onChange={() => toggleActionItem(item._id)}
+                            />
+                            <span className={item.status === 'completed' ? styles.actionItemDone : ''}>
+                              {item.task}
+                            </span>
+                          </label>
+                          <div className={styles.actionItemMeta}>
+                            {item.assignedTo !== 'Unassigned' && (
+                              <span className={styles.actionItemAssignee}>{item.assignedTo}</span>
+                            )}
+                            <span className={styles.actionItemDate}>
+                              {new Date(item.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+                            </span>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+
+                {/* TAB 7: PARTICIPANTS */}
+                {activeTab === 'participants' && (
+                  <div className={styles.attendancePanel}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', marginBottom: 8 }}>
+                      <span style={{ fontWeight: 700, fontSize: 14, color: '#191c1e' }}>
+                        {participantList.length} Participant{participantList.length !== 1 ? 's' : ''}
+                      </span>
+                    </div>
+                    {participantList.map(p => {
+                      const isLocal = p.userId === uniqueUserId;
+                      return (
+                        <div key={p.socketId || p.userId} className={styles.participantRow}>
+                          <div className={styles.participantAvatar}>
+                            {(p.userName || '?')[0].toUpperCase()}
+                          </div>
+                          <div className={styles.participantInfo}>
+                            <span className={styles.participantName}>
+                              {p.userName || 'Anonymous'}
+                              {isLocal && <span className={styles.participantYou}>(You)</span>}
+                            </span>
+                          </div>
+                          {p.hasRaisedHand && <span className={styles.participantHandIcon}>✋</span>}
+                        </div>
+                      );
+                    })}
+                    {participantList.length === 0 && (
+                      <div className={styles.participantsEmpty}>No participants yet</div>
+                    )}
                   </div>
                 )}
               </div>
