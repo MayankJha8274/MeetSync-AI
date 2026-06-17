@@ -718,6 +718,15 @@ Requirements:
             }
         });
 
+        // Screen share state relay
+        socket.on("screen-share-started", ({ meetingId }) => {
+            socket.to(meetingId).emit("screen-share-started", { socketId: socket.id });
+        });
+
+        socket.on("screen-share-stopped", ({ meetingId }) => {
+            socket.to(meetingId).emit("screen-share-stopped", { socketId: socket.id });
+        });
+
         // ==================== END NEW EVENTS ====================
 
         // User disconnects

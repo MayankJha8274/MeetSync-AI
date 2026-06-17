@@ -1779,4 +1779,32 @@
   color: #8a8fa8;
 }
 
+/* Screen share styles */
+.screenShareVideo {
+  object-fit: contain !important;
+}
+
+.screenShareTile {
+  border-color: #4caf50 !important;
+  box-shadow: 0 0 20px rgba(76, 175, 80, 0.3) !important;
+}
+
+.screenShareBadge {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(76, 175, 80, 0.9);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 20px;
+  backdrop-filter: blur(4px);
+  white-space: nowrap;
+}
+
 

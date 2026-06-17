@@ -103,6 +103,7 @@ export default function VideoMeetComponent() {
   const [audio, setAudio] = useState(true);
   const [screen, setScreen] = useState(false);
   const [screenAvailable, setScreenAvailable] = useState(false);
+  const [screenSharingSockets, setScreenSharingSockets] = useState([]);
   const [messages, setMessages] = useState([]);
   const [message, setMessage] = useState('');
   const [newMessages, setNewMessages] = useState(0);
@@ -650,7 +651,7 @@ const enrollFace = async () => {
   const getDislayMedia = () => {
     if (screen && navigator.mediaDevices.getDisplayMedia) {
       navigator.mediaDevices
-        .getDisplayMedia({ video: true, audio: false }) // Screen share video only
+        .getDisplayMedia({ video: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } }, audio: false })
         .then(getDislayMediaSuccess)
         .catch(e => {
           console.log('Screen share cancelled or error:', e);
@@ -693,6 +694,11 @@ const enrollFace = async () => {
           console.error('Error restoring stream to peer:', err);
         }
       }
+      // Notify remote peers that screen sharing has stopped
+      if (socketRef.current) {
+        socketRef.current.emit('screen-share-stopped', { meetingId: meetingCode });
+      }
+
       console.log('✅ Camera restored with', stream.getAudioTracks().length, 'audio,', stream.getVideoTracks().length, 'video tracks');
     } catch (err) {
       console.error('Failed to restore camera:', err);
@@ -753,6 +759,11 @@ const enrollFace = async () => {
       }
     }
     
+    // Notify remote peers that screen sharing has started
+    if (socketRef.current) {
+      socketRef.current.emit('screen-share-started', { meetingId: meetingCode });
+    }
+
     console.log('✅ Screen share started with', combinedStream.getAudioTracks().length, 'audio,', combinedStream.getVideoTracks().length, 'video tracks');
   };
 
@@ -992,6 +1003,13 @@ const enrollFace = async () => {
         setRaisedHandUsers(users || []);
       });
 
+      socketRef.current.on('screen-share-started', ({ socketId }) => {
+        setScreenSharingSockets(prev => prev.includes(socketId) ? prev : [...prev, socketId]);
+      });
+      socketRef.current.on('screen-share-stopped', ({ socketId }) => {
+        setScreenSharingSockets(prev => prev.filter(id => id !== socketId));
+      });
+
       socketRef.current.on('participant-list', (participants) => {
         setParticipantList(participants || []);
       });
@@ -1000,6 +1018,7 @@ const enrollFace = async () => {
       socketRef.current.on('user-left', id => {
         console.log('👋 User left:', id);
         setVideos(v => v.filter(vid => vid.socketId !== id));
+        setScreenSharingSockets(prev => prev.filter(sid => sid !== id));
         // Clean up peer connection
         if (connections[id]) {
           connections[id].close();
@@ -1998,8 +2017,8 @@ const enrollFace = async () => {
             <section className={styles.videoGrid}
               style={{ gridTemplateColumns: `repeat(${gridCols}, 1fr)`, gridTemplateRows: `repeat(${gridRows}, 1fr)` }}>
               {/* Local video */}
-              <div className={`${styles.videoTile} ${isMeetingOwner ? styles.speakerGlow : ''}`}>
-                <video ref={localVideoref} autoPlay muted playsInline className={styles.videoElement}
+              <div className={`${styles.videoTile} ${isMeetingOwner ? styles.speakerGlow : ''} ${screen ? styles.screenShareTile : ''}`}>
+                <video ref={localVideoref} autoPlay muted playsInline className={`${styles.videoElement} ${screen ? styles.screenShareVideo : ''}`}
                   style={{ display: (video && videoAvailable && window.localStream) ? 'block' : 'none' }} />
                 {(!video || !videoAvailable || !window.localStream) && (
                   <div className={styles.avatarPlaceholder}>
@@ -2010,13 +2029,16 @@ const enrollFace = async () => {
                   {audio ? <MicIcon className={styles.micOff} /> : <MicOffIcon className={styles.micOff} />}
                   <span>You</span>
                 </div>
+                {screen && <div className={styles.screenShareBadge}><ScreenShareIcon sx={{ fontSize: 14 }} /> Sharing Screen</div>}
                 {isMeetingOwner && <div className={styles.ownerBadge}><span>👑</span> Owner</div>}
                 {handRaised && <div className={styles.handIndicator}>✋</div>}
               </div>
 
               {/* Remote videos */}
-              {videos.map((v, index) => (
-                <div key={v.socketId} className={styles.videoTile}>
+              {videos.map((v, index) => {
+                const isScreenSharing = screenSharingSockets.includes(v.socketId);
+                return (
+                <div key={v.socketId} className={`${styles.videoTile} ${isScreenSharing ? styles.screenShareTile : ''}`}>
                   <video
                     ref={ref => {
                       if (ref && v.stream) {
@@ -2040,15 +2062,17 @@ const enrollFace = async () => {
                     }}
                     autoPlay
                     playsInline
-                    className={styles.videoElement}
+                    className={`${styles.videoElement} ${isScreenSharing ? styles.screenShareVideo : ''}`}
                   />
                   <div className={styles.videoLabel}>
                     <MicIcon />
                     <span>{participantList.find(p => p.socketId === v.socketId)?.userName || `User ${index + 1}`}</span>
                   </div>
+                  {isScreenSharing && <div className={styles.screenShareBadge}><ScreenShareIcon sx={{ fontSize: 14 }} /> Sharing Screen</div>}
                   {raisedHandUsers.some(u => u.socketId === v.socketId) && <div className={styles.handIndicator}>✋</div>}
                 </div>
-              ))}
+                );
+              })}
 
               {videos.length === 0 && !(video && videoAvailable) && (
                 <div className={styles.emptyState}>Waiting for participants...</div>
