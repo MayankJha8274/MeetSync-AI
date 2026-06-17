@@ -209,18 +209,20 @@ export default function VideoMeetComponent() {
     loadModels();
   }, []);
   
-  // debug: stop other streams when enrollment modal opens
+  // Stop the main stream when enrollment modal opens;
+  // restore it when the modal closes.
   useEffect(() => {
-  if (showEnrollmentModal) {
-    console.log('Stopping other camera streams before enrollment');
-
-    if (window.localStream) {
-      window.localStream.getTracks().forEach(t => t.stop());
-      window.localStream = null;
+    if (showEnrollmentModal) {
+      console.log('Stopping main camera stream for enrollment');
+      if (window.localStream) {
+        window.localStream.getTracks().forEach(t => t.stop());
+        window.localStream = null;
+      }
+    } else if (!window.localStream) {
+      console.log('Restoring main camera stream after enrollment');
+      getPermissions();
     }
-    getPermissions();
-  }
-}, [showEnrollmentModal]);
+  }, [showEnrollmentModal]);
 
 
   // Always request a fresh camera stream for the enrollment modal
