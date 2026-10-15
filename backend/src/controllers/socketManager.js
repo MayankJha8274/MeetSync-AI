@@ -399,26 +399,8 @@ export const connectToSocket = (server) => {
                 return;
             }
 
-            // ── CASE 3: Owner present and room occupied → waiting room ──
-            if (meetingOwners[path] && connections[path].length > 0) {
-                if (!waitingRoom[path]) waitingRoom[path] = [];
-                waitingRoom[path].push({ socketId: socket.id, userId, userName });
-                console.log(`â³ User ${userName} (${userId}) added to waiting room for meeting: ${path}`);
-
-                // Notify the meeting owner
-                const ownerUserId = meetingOwners[path];
-                const ownerUser = connections[path].find(u => u.userId === ownerUserId);
-                if (ownerUser) {
-                    io.to(ownerUser.socketId).emit('join-request', { socketId: socket.id, userId, userName });
-                    console.log(`ðŸ”” Join request sent to owner for: ${userName}`);
-                }
-
-                // Tell the user they're waiting for approval
-                io.to(socket.id).emit('waiting-for-approval');
-                return;
-            }
-
-            // -- Edge case: owner set but room empty -> admit directly --
+            // ── CASE 3: A valid meeting link admits users immediately ──
+            // WebRTC negotiation is handled by the clients after this event.
             socket.join(path);
             connections[path].push({
                 socketId: socket.id,
@@ -1138,4 +1120,3 @@ Requirements:
 
     return io;
 }
-

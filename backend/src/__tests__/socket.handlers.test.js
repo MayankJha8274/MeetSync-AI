@@ -113,6 +113,48 @@ describe('Chat Messaging', () => {
   }, 20000);
 });
 
+describe('Meeting admission and WebRTC signaling', () => {
+  test('admits a second link user immediately and notifies both peers', async () => {
+    const room = roomId();
+    const owner = await connectClient();
+    const joiner = await connectClient();
+    await joinRoom(owner, room, 'owner-id', 'Owner', true);
+    const ownerJoined = new Promise(resolve => owner.once('user-joined', (...args) => resolve(args)));
+    const joinerJoined = new Promise(resolve => joiner.once('user-joined', (...args) => resolve(args)));
+    await joinRoom(joiner, room, 'joiner-id', 'Joiner', false);
+
+    const [ownerEvent, joinerEvent] = await Promise.all([ownerJoined, joinerJoined]);
+    expect(ownerEvent[0]).toBe(joiner.id);
+    expect(joinerEvent[0]).toBe(joiner.id);
+    expect(ownerEvent[1]).toEqual(expect.arrayContaining([owner.id, joiner.id]));
+    expect(joinerEvent[1]).toEqual(expect.arrayContaining([owner.id, joiner.id]));
+
+    await disconnect(owner);
+    await disconnect(joiner);
+  }, 20000);
+
+  test('relays WebRTC SDP and ICE signals to the addressed peer only', async () => {
+    const room = roomId();
+    const owner = await connectClient();
+    const joiner = await connectClient();
+    await joinRoom(owner, room, 'owner-id', 'Owner', true);
+    await joinRoom(joiner, room, 'joiner-id', 'Joiner', false);
+
+    const signalPromise = new Promise(resolve => {
+      joiner.once('signal', (fromId, message) => resolve({ fromId, message }));
+    });
+    const payload = JSON.stringify({ sdp: { type: 'offer', sdp: 'test-sdp' } });
+    owner.emit('signal', joiner.id, payload);
+
+    const received = await signalPromise;
+    expect(received.fromId).toBe(owner.id);
+    expect(received.message).toBe(payload);
+
+    await disconnect(owner);
+    await disconnect(joiner);
+  }, 20000);
+});
+
 describe('Transcription', () => {
   test('relays transcript entry to other users', async () => {
     const room = roomId();

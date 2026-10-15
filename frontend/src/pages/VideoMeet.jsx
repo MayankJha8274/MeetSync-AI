@@ -1206,7 +1206,13 @@ const enrollFace = async () => {
             
             window.localStream.getTracks().forEach(track => {
               console.log(`  ➡️ Adding ${track.kind} track: ${track.label} - Enabled: ${track.enabled} - ReadyState: ${track.readyState}`);
-              const sender = connections[socketListId].addTrack(track, window.localStream);
+              const peerConnection = connections[socketListId];
+              const sender = typeof peerConnection.addTrack === 'function'
+                ? peerConnection.addTrack(track, window.localStream)
+                : null;
+              if (!sender && typeof peerConnection.addStream === 'function') {
+                peerConnection.addStream(window.localStream);
+              }
               
               // Verify sender was created
               if (track.kind === 'audio') {
@@ -1219,10 +1225,11 @@ const enrollFace = async () => {
             
             console.log(`🔊 All tracks successfully added to peer ${socketListId}`);
             
-            // Mark that we're creating an initial offer so gotMessageFromServer defers incoming offers
+          // Only one side creates the initial offer. This removes offer collisions
+          // while still allowing either side to receive both audio and video tracks.
+          const shouldCreateOffer = socketIdRef.current < socketListId;
+          if (shouldCreateOffer) {
             connections[socketListId]._creatingOffer = true;
-            
-            // Always create an offer so polite/impolite collision logic can resolve
             console.log(`📤 Creating offer for ${socketListId}`);
             connections[socketListId].createOffer()
               .then(description => connections[socketListId].setLocalDescription(description))
@@ -1233,17 +1240,21 @@ const enrollFace = async () => {
               .catch(err => console.error(`❌ Error creating offer for ${socketListId}:`, err))
               .finally(() => {
                 connections[socketListId]._creatingOffer = false;
-                // After offer created, replay any SDP that arrived before PC existed or during offer creation
                 if (pendingSdp[socketListId]) {
-                  console.log(`📦 Replaying queued SDP for ${socketListId} through collision handler`);
+                  console.log(`📦 Replaying queued SDP for ${socketListId}`);
                   const rawMsg = pendingSdp[socketListId];
                   delete pendingSdp[socketListId];
                   gotMessageFromServer(socketListId, rawMsg);
                 }
               });
-          } else {
-            console.error('❌ ERROR: window.localStream is null! Cannot add stream to peer connection.');
+          } else if (pendingSdp[socketListId]) {
+            const rawMsg = pendingSdp[socketListId];
+            delete pendingSdp[socketListId];
+            gotMessageFromServer(socketListId, rawMsg);
           }
+        } else {
+            console.error('❌ ERROR: window.localStream is null! Cannot add stream to peer connection.');
+        }
         });
         console.log(`[DIAG] user-joined handler: created ${clients.filter(c => c !== socketIdRef.current && !connections[c]).length} new peer connections`);
       });
@@ -3130,6 +3141,3 @@ const enrollFace = async () => {
     </div>
   );
 }
-
-
-
