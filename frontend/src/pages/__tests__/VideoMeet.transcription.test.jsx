@@ -165,6 +165,12 @@ function fireRecognitionEnd() {
 
 // --- A. Toggle Captions ---
 describe('toggleCaptions()', () => {
+  test('does not start transcription until the participant opts in', async () => {
+    renderVideoMeet();
+    await joinMeeting();
+    expect(recognitionCtor).not.toHaveBeenCalled();
+  });
+
   test('toggles showCaptions on and starts transcription', async () => {
     renderVideoMeet();
     await enableCaptions();
@@ -241,7 +247,9 @@ describe('startWebSpeech() - onerror', () => {
     renderVideoMeet();
     await enableCaptions();
     fireRecognitionError('aborted');
-    await new Promise(r => setTimeout(r, 100));
+    await waitFor(() => {
+      expect(window.MediaRecorder).toHaveBeenCalled();
+    });
     expect(screen.queryByText(/Speech recognition error/)).not.toBeInTheDocument();
   });
 
@@ -275,17 +283,46 @@ describe('startWebSpeech() - onerror', () => {
   });
 });
 
-// --- D. Web Speech --- onend / auto-restart ---
-describe('startWebSpeech() - onend / auto-restart', () => {
+// --- D. Web Speech --- onend / fallback ---
+describe('startWebSpeech() - onend / fallback', () => {
   beforeEach(() => { jest.useFakeTimers(); });
   afterEach(() => { jest.useRealTimers(); });
 
-  test('onend auto-restarts when isRecording is true', async () => {
+  test('unexpected onend switches to the fallback without restarting', async () => {
     renderVideoMeet();
     await enableCaptions();
     fireRecognitionEnd();
     act(() => { jest.advanceTimersByTime(200); });
-    expect(recognition.start).toHaveBeenCalledTimes(2);
+    expect(recognition.start).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(window.MediaRecorder).toHaveBeenCalled();
+    });
+  });
+
+  test('aborted sessions switch engines instead of restarting', async () => {
+    renderVideoMeet();
+    await enableCaptions();
+    fireRecognitionError('aborted');
+    fireRecognitionEnd();
+
+    act(() => { jest.advanceTimersByTime(200); });
+    expect(recognition.start).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(window.MediaRecorder).toHaveBeenCalled();
+    });
+  });
+
+  test('fallback is started only once after an abort', async () => {
+    renderVideoMeet();
+    await enableCaptions();
+
+    fireRecognitionError('aborted');
+    fireRecognitionEnd();
+
+    await waitFor(() => {
+      expect(window.MediaRecorder).toHaveBeenCalled();
+    });
+    expect(recognition.start).toHaveBeenCalledTimes(1);
   });
 
   test('onend does NOT restart when recognition instance is stale', async () => {

@@ -160,13 +160,17 @@ describe('Transcription', () => {
     const room = roomId();
     const { owner, joiner } = await setupTwoUsers(room);
 
+    const ownerTranscriptPromise = new Promise(resolve => {
+      owner.once('transcript-entry', data => resolve(data));
+    });
     const transcriptPromise = new Promise(resolve => {
       joiner.once('transcript-entry', data => resolve(data));
     });
 
     owner.emit('transcript-entry', { meetingId: room, text: 'Hello everyone', speaker: 'Owner', lang: 'en', timestamp: Date.now() });
 
-    const received = await transcriptPromise;
+    const [ownerReceived, received] = await Promise.all([ownerTranscriptPromise, transcriptPromise]);
+    expect(ownerReceived.text).toBe('Hello everyone');
     expect(received.text).toBe('Hello everyone');
     expect(received.speaker).toBe('Owner');
 
@@ -201,6 +205,34 @@ describe('Transcription', () => {
 
     await disconnect(first);
     await disconnect(second);
+  }, 20000);
+
+  test('does not accept transcript entries from sockets outside the meeting room', async () => {
+    const room = roomId();
+    const sender = await connectClient();
+    const observer = await connectClient();
+    await joinRoom(sender, room, 'sender-id', 'Sender', true);
+    await joinRoom(observer, room, 'observer-id', 'Observer', false);
+
+    const received = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => resolve(false), 500);
+      observer.once('transcript-entry', () => {
+        clearTimeout(timer);
+        resolve(true);
+      });
+    });
+
+    sender.emit('transcript-entry', {
+      meetingId: `${room}-wrong`,
+      text: 'Should not be accepted',
+      speaker: 'Sender',
+      lang: 'en',
+      timestamp: Date.now(),
+    });
+
+    expect(await received).toBe(false);
+    await disconnect(sender);
+    await disconnect(observer);
   }, 20000);
 });
 

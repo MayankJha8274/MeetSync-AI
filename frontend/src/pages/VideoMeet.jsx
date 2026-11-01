@@ -181,6 +181,8 @@ export default function VideoMeetComponent() {
   const transformersPipelineRef = useRef(null);
   const speechStreamRef = useRef(null);
   const speechWatchdogRef = useRef(null);
+  const speechStopRequestedRef = useRef(false);
+  const speechAbortCountRef = useRef(0);
   const interimTimeoutRef = useRef(null);
   const webSpeechTriedRef = useRef(false);
   const permissionsPromiseRef = useRef(null);
@@ -957,8 +959,6 @@ const enrollFace = async () => {
     socketRef.current.on('signal', gotMessageFromServer);
     socketRef.current.on('connect', () => {
       console.log('🔌 Socket connected! Socket ID:', socketRef.current.id);
-      console.log('🚪 Joining meeting room:', meetingCode);
-      socketRef.current.emit('join-call', meetingCode, uniqueUserId, username || 'Anonymous', true);
       socketIdRef.current = socketRef.current.id;
 
       // Listen for owner assignment from server
@@ -1034,7 +1034,14 @@ const enrollFace = async () => {
       });
 
       socketRef.current.on('transcript-entry', ({ text, speaker, lang, timestamp }) => {
-        setTranscript(prev => [...prev, { text, speaker, lang, timestamp }]);
+        setTranscript(prev => {
+          const isDuplicate = prev.some(entry =>
+            entry.text === text &&
+            entry.speaker === speaker &&
+            entry.timestamp === timestamp
+          );
+          return isDuplicate ? prev : [...prev, { text, speaker, lang, timestamp }];
+        });
       });
 
       socketRef.current.on('summary-generated', (summary) => {
@@ -1111,14 +1118,10 @@ const enrollFace = async () => {
         console.log('  Event ID:', id);
         console.log('  Clients array:', clients);
         console.log('  My socket ID:', socketIdRef.current);
-        // If we were waiting for approval, we're now admitted
         if (waitingForApprovalRef.current) {
           console.log('✅ Host approved you! Joining the meeting...');
           waitingForApprovalRef.current = false;
           setIsWaitingForApproval(false);
-          if (!isRecordingRef.current) {
-            setTimeout(() => startTranscription(), 1500);
-          }
         }
         
         clients.forEach(socketListId => {
@@ -1258,6 +1261,11 @@ const enrollFace = async () => {
         });
         console.log(`[DIAG] user-joined handler: created ${clients.filter(c => c !== socketIdRef.current && !connections[c]).length} new peer connections`);
       });
+
+      // Register all room listeners before joining so replayed transcript
+      // history and other immediate room events cannot be missed.
+      console.log('🚪 Joining meeting room:', meetingCode);
+      socketRef.current.emit('join-call', meetingCode, uniqueUserId, username || 'Anonymous', true);
     });
   };
 
@@ -1308,11 +1316,22 @@ const enrollFace = async () => {
 
   // ============= TRANSCRIPTION FUNCTIONS =============
 
+  const emitTranscriptEntry = (entry) => {
+    const socket = socketRef.current;
+    if (!socket || socket.connected === false) {
+      setTranscriptError('Meeting connection is not ready. Reconnect before sending transcript entries.');
+      return false;
+    }
+    socket.emit('transcript-entry', { meetingId: meetingCode, ...entry });
+    return true;
+  };
+
   const startWebSpeech = async () => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) return false;
 
     networkErrorCountRef.current = 0;
+    speechStopRequestedRef.current = false;
 
     // Web Speech API accesses the mic internally — no separate getUserMedia needed.
     // Using window.localStream directly avoids driver contention from two concurrent audio streams.
@@ -1349,7 +1368,7 @@ const enrollFace = async () => {
             if (confidence === 0) console.warn('⚠️ Web Speech: confidence=0 (API unsupported), accepting result');
             const entry = { text, speaker: username || 'Anonymous', lang: 'auto', timestamp: Date.now() };
             setTranscript(prev => [...prev, entry]);
-            socketRef.current?.emit('transcript-entry', { meetingId: meetingCode, ...entry });
+            emitTranscriptEntry(entry);
           }
         } else {
           interim += result[0].transcript;
@@ -1362,14 +1381,23 @@ const enrollFace = async () => {
         setInterimText('');
       }
       networkErrorCountRef.current = 0;
+      speechAbortCountRef.current = 0;
       rearmWatchdog();
     };
 
     recognition.onerror = (event) => {
-      console.error('❌ Web Speech error:', event.error);
-      if (event.error === 'no-speech' || event.error === 'aborted') {
+      if (event.error === 'aborted') {
+        // Chrome can abort a session without releasing it cleanly. Retrying
+        // the same instance creates an abort/end/restart loop, so switch
+        // engines immediately and let the fallback own the microphone.
+        speechAbortCountRef.current++;
+        switchToTransformers();
         return;
       }
+      if (event.error === 'no-speech') {
+        return;
+      }
+      console.error('❌ Web Speech error:', event.error);
 
       if (event.error === 'network') {
         networkErrorCountRef.current++;
@@ -1378,13 +1406,7 @@ const enrollFace = async () => {
 
         if (networkErrorCountRef.current >= 3) {
           console.log('🔄 Web Speech failed, switching to Transformers.js...');
-          recognition.onend = null;
-          recognition.onresult = null;
-          recognition.onerror = null;
-          try { recognition.stop(); } catch (e) {}
-          if (recognitionRef.current === recognition) recognitionRef.current = null;
-          webSpeechTriedRef.current = true;
-          startTransformers();
+          switchToTransformers();
           return;
         }
         return;
@@ -1395,31 +1417,16 @@ const enrollFace = async () => {
       isRecordingRef.current = false;
     };
 
-    let restartAttempts = 0;
-    const MAX_RESTART_ATTEMPTS = 5;
-    const tryRestart = () => {
-      if (!isRecordingRef.current || recognitionRef.current !== recognition) return;
-      if (restartAttempts >= MAX_RESTART_ATTEMPTS) {
-        console.error('❌ Web Speech: max restart attempts reached, stopping');
-        setIsRecording(false);
-        isRecordingRef.current = false;
-        return;
-      }
-      restartAttempts++;
-      const delay = Math.min(200 * Math.pow(2, restartAttempts - 1), 3000);
-      console.log(`🎤 Web Speech: restart attempt ${restartAttempts}/${MAX_RESTART_ATTEMPTS} in ${delay}ms`);
-      setTimeout(() => {
-        if (!isRecordingRef.current || recognitionRef.current !== recognition) return;
-        try {
-          recognition.start();
-          console.log('🎤 Web Speech: restarted');
-          restartAttempts = 0;
-          rearmWatchdog();
-        } catch (e) {
-          console.error('❌ Web Speech restart failed:', e.message);
-          tryRestart();
-        }
-      }, delay);
+    const switchToTransformers = () => {
+      if (recognitionRef.current !== recognition) return;
+      console.warn('⚠️ Web Speech was interrupted; switching to local transcription fallback');
+      recognition.onend = null;
+      recognition.onresult = null;
+      recognition.onerror = null;
+      try { recognition.stop(); } catch (e) {}
+      recognitionRef.current = null;
+      webSpeechTriedRef.current = true;
+      startTransformers();
     };
 
     recognition.onend = () => {
@@ -1428,21 +1435,28 @@ const enrollFace = async () => {
         console.log('🛑 Web Speech: ignoring stale instance onend');
         return;
       }
+      if (speechStopRequestedRef.current) {
+        return;
+      }
       if (isRecordingRef.current) {
-        tryRestart();
+        switchToTransformers();
       }
     };
 
+    recognitionRef.current = recognition;
     try {
       recognition.start();
       console.log('🎤 Web Speech: started');
     } catch (e) {
       console.error('❌ Web Speech start failed:', e.message);
+      recognition.onend = null;
+      recognition.onresult = null;
+      recognition.onerror = null;
+      recognitionRef.current = null;
       return false;
     }
 
     rearmWatchdog();
-    recognitionRef.current = recognition;
     return true;
   };
 
@@ -1505,7 +1519,7 @@ const enrollFace = async () => {
             const text = result.text.trim();
             const entry = { text, speaker: username || 'Anonymous', lang: 'auto', timestamp: Date.now() };
             setTranscript(prev => [...prev, entry]);
-            socketRef.current?.emit('transcript-entry', { meetingId: meetingCode, ...entry });
+            emitTranscriptEntry(entry);
           }
         } catch (err) {
           console.error('Transformers transcription error:', err);
@@ -1530,6 +1544,13 @@ const enrollFace = async () => {
   };
 
   const startTranscription = async () => {
+    if (isRecordingRef.current) return;
+
+    if (socketRef.current && socketRef.current.connected === false) {
+      setTranscriptError('Meeting connection is not ready. Reconnect before starting transcription.');
+      return;
+    }
+
     // Check HTTPS — Web Speech API requires secure context
     const isLocal = window.location.hostname === "localhost" ||
                     window.location.hostname === "127.0.0.1";
@@ -1557,6 +1578,8 @@ const enrollFace = async () => {
     setIsRecording(true);
     isRecordingRef.current = true;
     webSpeechTriedRef.current = false;
+    speechStopRequestedRef.current = false;
+    speechAbortCountRef.current = 0;
 
     const webSpeechStarted = await startWebSpeech();
     if (webSpeechStarted) {
@@ -1570,6 +1593,7 @@ const enrollFace = async () => {
   };
 
   const stopTranscription = () => {
+    speechStopRequestedRef.current = true;
     setIsRecording(false);
     isRecordingRef.current = false;
     setInterimText('');
@@ -1579,6 +1603,7 @@ const enrollFace = async () => {
       clearTimeout(speechWatchdogRef.current);
       speechWatchdogRef.current = null;
     }
+    speechAbortCountRef.current = 0;
 
     if (interimTimeoutRef.current) {
       clearTimeout(interimTimeoutRef.current);
@@ -1614,7 +1639,7 @@ const enrollFace = async () => {
     if (!text) return;
     const entry = { text, speaker: username || 'Anonymous', lang: 'manual', timestamp: Date.now() };
     setTranscript(prev => [...prev, entry]);
-    socketRef.current?.emit('transcript-entry', { meetingId: meetingCode, ...entry });
+    emitTranscriptEntry(entry);
     setManualTranscriptText('');
   };
 

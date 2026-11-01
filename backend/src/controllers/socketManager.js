@@ -819,15 +819,32 @@ except executiveSummary which is a string.`
 
         // ==================== TRANSCRIPT & SUMMARY ====================
 
-// Store transcript entry on server and relay to all participants
+// Store transcript entries on the server and relay them to every participant,
+// including the participant who produced the entry.
 socket.on("transcript-entry", ({ meetingId, text, speaker, lang, timestamp }) => {
-    // Store on server for merging and persistence
-    if (!transcripts[meetingId]) transcripts[meetingId] = [];
-    transcripts[meetingId].push({ text, speaker, lang, timestamp });
+    if (!meetingId || !socket.rooms.has(meetingId) || typeof text !== "string" || !text.trim()) {
+        console.warn(`⚠️ Ignoring invalid transcript entry from ${socket.id}`);
+        return;
+    }
 
-    // Broadcast to all other participants in the room
-    socket.to(meetingId).emit("transcript-entry", { text, speaker, lang, timestamp });
-    console.log(`📝 Transcript [${meetingId}] ${speaker}: ${text.substring(0, 60)}`);
+    const entry = {
+        text: text.trim(),
+        speaker: typeof speaker === "string" && speaker.trim() ? speaker.trim() : "Anonymous",
+        lang: typeof lang === "string" && lang.trim() ? lang : "en-IN",
+        timestamp: Number.isFinite(timestamp) ? timestamp : Date.now(),
+    };
+
+    if (!transcripts[meetingId]) transcripts[meetingId] = [];
+    const isDuplicate = transcripts[meetingId].some(existing =>
+        existing.timestamp === entry.timestamp &&
+        existing.speaker === entry.speaker &&
+        existing.text === entry.text
+    );
+    if (isDuplicate) return;
+
+    transcripts[meetingId].push(entry);
+    io.to(meetingId).emit("transcript-entry", entry);
+    console.log(`📝 Transcript [${meetingId}] ${entry.speaker}: ${entry.text.substring(0, 60)}`);
 });
 
         // Generate AI summary from transcript entries (merged server + client)
