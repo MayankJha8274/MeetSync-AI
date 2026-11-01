@@ -983,12 +983,7 @@ const enrollFace = async () => {
     socketRef.current.on('signal', gotMessageFromServer);
     socketRef.current.on('connect', () => {
       console.log('🔌 Socket connected! Socket ID:', socketRef.current.id);
-<<<<<<< HEAD
-=======
       setSocketConnected(true);
-      console.log('🚪 Joining meeting room:', meetingCode);
-      socketRef.current.emit('join-call', meetingCode, uniqueUserId, username || 'Anonymous', true);
->>>>>>> 44dfae9c6232f932333e21e8d72d1f8c87f9c2b3
       socketIdRef.current = socketRef.current.id;
 
       // Listen for owner assignment from server
@@ -1063,6 +1058,7 @@ const enrollFace = async () => {
         setTimeout(() => setReactions(prev => prev.filter(x => x.id !== r.id)), 2000);
       });
 
+      socketRef.current.off('transcript-entry');
       socketRef.current.on('transcript-entry', ({ text, speaker, lang, timestamp }) => {
         setTranscript(prev => {
           const isDuplicate = prev.some(entry =>
@@ -1156,6 +1152,11 @@ const enrollFace = async () => {
           console.log('✅ Host approved you! Joining the meeting...');
           waitingForApprovalRef.current = false;
           setIsWaitingForApproval(false);
+        }
+        if (clients.includes(socketIdRef.current) && !isRecordingRef.current) {
+          startTranscription().then(started => {
+            if (started) setShowCaptions(true);
+          });
         }
         
         clients.forEach(socketListId => {
@@ -1458,11 +1459,7 @@ const enrollFace = async () => {
 
         if (networkErrorCountRef.current >= 3) {
           console.log('🔄 Web Speech failed, switching to Transformers.js...');
-<<<<<<< HEAD
           switchToTransformers();
-=======
-          switchToLocalTranscription();
->>>>>>> 44dfae9c6232f932333e21e8d72d1f8c87f9c2b3
           return;
         }
         return;
@@ -1511,14 +1508,10 @@ const enrollFace = async () => {
       console.log('🎤 Web Speech: started');
     } catch (e) {
       console.error('❌ Web Speech start failed:', e.message);
-<<<<<<< HEAD
       recognition.onend = null;
       recognition.onresult = null;
       recognition.onerror = null;
       recognitionRef.current = null;
-=======
-      if (recognitionRef.current === recognition) recognitionRef.current = null;
->>>>>>> 44dfae9c6232f932333e21e8d72d1f8c87f9c2b3
       return false;
     }
 
@@ -1610,11 +1603,11 @@ const enrollFace = async () => {
   };
 
   const startTranscription = async () => {
-    if (isRecordingRef.current) return;
+    if (isRecordingRef.current) return true;
 
     if (socketRef.current && socketRef.current.connected === false) {
       setTranscriptError('Meeting connection is not ready. Reconnect before starting transcription.');
-      return;
+      return false;
     }
 
     // Check HTTPS — Web Speech API requires secure context
@@ -1625,7 +1618,7 @@ const enrollFace = async () => {
         "Speech recognition requires HTTPS. Please access this meeting " +
         "via a secure (https://) connection."
       );
-      return;
+      return false;
     }
 
     // Check browser support
@@ -1650,12 +1643,13 @@ const enrollFace = async () => {
     const webSpeechStarted = await startWebSpeech();
     if (webSpeechStarted) {
       console.log('🎤 Using Web Speech API (Chrome/Edge)');
-      return;
+      return true;
     }
 
     webSpeechTriedRef.current = true;
     console.log('🎤 Using Transformers.js (Firefox/Safari)');
     startTransformers();
+    return true;
   };
 
   const stopTranscription = () => {

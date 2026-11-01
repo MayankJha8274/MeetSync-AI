@@ -70,7 +70,11 @@ async function triggerSocketConnect() {
     expect(mockSocket.on).toHaveBeenCalledWith('connect', expect.any(Function));
   });
   const connectHandler = mockSocket.on.mock.calls.find(c => c[0] === 'connect')?.[1];
-  if (connectHandler) act(() => connectHandler());
+  if (connectHandler) {
+    act(() => connectHandler());
+    const userJoinedHandler = mockSocket.on.mock.calls.find(c => c[0] === 'user-joined')?.[1];
+    if (userJoinedHandler) act(() => userJoinedHandler(mockSocket.id, [mockSocket.id]));
+  }
 }
 
 beforeEach(() => {
@@ -137,12 +141,16 @@ function renderVideoMeet() {
 async function joinMeeting() {
   await userEvent.type(screen.getByPlaceholderText('Your display name'), 'Test User');
   await userEvent.click(screen.getByText('Enter Meeting Room'));
+  await triggerSocketConnect();
 }
 
 async function enableCaptions() {
   await joinMeeting();
-  await waitFor(() => expect(screen.getByTitle('Show Subtitles')).toBeInTheDocument());
-  await userEvent.click(screen.getByTitle('Show Subtitles'));
+  await waitFor(() => {
+    expect(recognitionCtor).toHaveBeenCalled();
+    expect(recognition.onresult).toEqual(expect.any(Function));
+    expect(screen.getByTitle('Hide Subtitles')).toBeInTheDocument();
+  });
 }
 
 function fireRecognitionResult(isFinal, transcript, confidence = 0.9) {
@@ -165,16 +173,16 @@ function fireRecognitionEnd() {
 
 // --- A. Toggle Captions ---
 describe('toggleCaptions()', () => {
-  test('does not start transcription until the participant opts in', async () => {
+  test('starts transcription automatically after the participant joins', async () => {
     renderVideoMeet();
     await joinMeeting();
-    expect(recognitionCtor).not.toHaveBeenCalled();
+    await waitFor(() => expect(recognitionCtor).toHaveBeenCalled());
   });
 
-  test('toggles showCaptions on and starts transcription', async () => {
+  test('keeps subtitles visible while automatic transcription is active', async () => {
     renderVideoMeet();
     await enableCaptions();
-    expect(recognitionCtor).toHaveBeenCalled();
+    expect(screen.getByTitle('Hide Subtitles')).toBeInTheDocument();
     expect(recognition.start).toHaveBeenCalled();
   });
 
@@ -354,7 +362,7 @@ describe('addManualEntry()', () => {
     await userEvent.type(input, 'Manual note');
     await userEvent.click(screen.getByText('Add'));
     await waitFor(() => {
-      expect(screen.getByText('Manual note')).toBeInTheDocument();
+      expect(screen.getAllByText('Manual note').length).toBeGreaterThan(0);
     });
     expect(mockSocket.emit).toHaveBeenCalledWith(
       'transcript-entry',
@@ -367,7 +375,7 @@ describe('addManualEntry()', () => {
     await joinMeeting();
     await userEvent.click(screen.getByText('Transcript'));
     await userEvent.click(screen.getByText('Add'));
-    expect(screen.getByText(/No transcript yet/)).toBeInTheDocument();
+    expect(screen.queryByText('Manual note')).not.toBeInTheDocument();
   });
 
   test('Enter key also submits', async () => {
@@ -377,7 +385,7 @@ describe('addManualEntry()', () => {
     const input = screen.getByPlaceholderText('Type transcript entry manually...');
     await userEvent.type(input, 'Enter entry{enter}');
     await waitFor(() => {
-      expect(screen.getByText('Enter entry')).toBeInTheDocument();
+      expect(screen.getAllByText('Enter entry').length).toBeGreaterThan(0);
     });
   });
 });
@@ -440,11 +448,12 @@ describe('Captions Overlay UI', () => {
 
 // --- H. Transcript Tab UI ---
 describe('Transcript Tab UI', () => {
-  test('shows empty state when no transcript', async () => {
+  test('keeps the transcript tab available while automatic recording is active', async () => {
     renderVideoMeet();
     await joinMeeting();
     await userEvent.click(screen.getByText('Transcript'));
-    expect(screen.getByText(/No transcript yet/)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Type transcript entry manually...')).toBeInTheDocument();
+    expect(screen.queryByText(/No transcript yet/)).not.toBeInTheDocument();
   });
 
   test('shows error banner when transcriptError is set', async () => {
@@ -483,9 +492,9 @@ describe('Transcript Tab UI', () => {
     renderVideoMeet();
     await joinMeeting();
     await userEvent.click(screen.getByText('Transcript'));
-    await userEvent.click(screen.getByText('⚪ Start'));
+    await userEvent.click(screen.getByText('🔴 Stop'));
     await waitFor(() => {
-      expect(screen.getByText('🔴 Stop')).toBeInTheDocument();
+      expect(screen.getByText('⚪ Start')).toBeInTheDocument();
     });
   });
 });
@@ -505,7 +514,7 @@ describe('Socket event handlers', () => {
       handler({ text: 'Remote entry', speaker: 'Remote User', lang: 'en', timestamp: Date.now() });
     });
     await waitFor(() => {
-      expect(screen.getByText('Remote entry')).toBeInTheDocument();
+      expect(screen.getAllByText('Remote entry').length).toBeGreaterThan(0);
     });
   });
 

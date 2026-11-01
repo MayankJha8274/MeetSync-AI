@@ -113,7 +113,6 @@ describe('Chat Messaging', () => {
   }, 20000);
 });
 
-<<<<<<< HEAD
 describe('Meeting admission and WebRTC signaling', () => {
   test('admits a second link user immediately and notifies both peers', async () => {
     const room = roomId();
@@ -153,7 +152,9 @@ describe('Meeting admission and WebRTC signaling', () => {
 
     await disconnect(owner);
     await disconnect(joiner);
-=======
+  }, 20000);
+});
+
 describe('Meeting lifecycle', () => {
   test('a participant leaving does not end the meeting for the owner', async () => {
     const room = roomId();
@@ -168,7 +169,6 @@ describe('Meeting lifecycle', () => {
     await expect(reportPromise).resolves.toBeNull();
     await disconnect(joiner);
     await disconnect(owner);
->>>>>>> 44dfae9c6232f932333e21e8d72d1f8c87f9c2b3
   }, 20000);
 });
 
@@ -224,7 +224,6 @@ describe('Transcription', () => {
     await disconnect(second);
   }, 20000);
 
-<<<<<<< HEAD
   test('does not accept transcript entries from sockets outside the meeting room', async () => {
     const room = roomId();
     const sender = await connectClient();
@@ -251,7 +250,8 @@ describe('Transcription', () => {
     expect(await received).toBe(false);
     await disconnect(sender);
     await disconnect(observer);
-=======
+  }, 20000);
+
   test('relays transcript entries from multiple participants to the room', async () => {
     const room = roomId();
     const { owner, joiner } = await setupTwoUsers(room);
@@ -273,7 +273,6 @@ describe('Transcription', () => {
 
     await disconnect(owner);
     await disconnect(joiner);
->>>>>>> 44dfae9c6232f932333e21e8d72d1f8c87f9c2b3
   }, 20000);
 });
 

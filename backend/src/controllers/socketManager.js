@@ -400,6 +400,7 @@ export const connectToSocket = (server) => {
             // ── CASE 1: This user IS the meeting owner ──
             if (meetingOwners[path] === userId) {
                 socket.join(path);
+                connections[path] = connections[path].filter(user => user.socketId !== socket.id);
                 connections[path].push({
                     socketId: socket.id,
                     userId: userId || null,
@@ -453,6 +454,7 @@ export const connectToSocket = (server) => {
             // ── CASE 3: A valid meeting link admits users immediately ──
             // WebRTC negotiation is handled by the clients after this event.
             socket.join(path);
+            connections[path] = connections[path].filter(user => user.socketId !== socket.id);
             connections[path].push({
                 socketId: socket.id,
                 userId: userId || null,
