@@ -1,525 +1,641 @@
+<div align="center">
+
 # MeetSync AI
 
-MeetSync AI is a full-stack video-meeting application built with React, Express, Socket.IO, WebRTC, MongoDB, and browser-based AI features.
+### Collaborative video meetings with browser AI, attendance, and shared meeting memory
 
-The application combines:
+[![Node.js](https://img.shields.io/badge/Node.js-18%2B-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=20232A)](https://react.dev/)
+[![Express](https://img.shields.io/badge/Express-4-000000?logo=express&logoColor=white)](https://expressjs.com/)
+[![Socket.IO](https://img.shields.io/badge/Socket.IO-4-010101?logo=socket.io&logoColor=white)](https://socket.io/)
+[![MongoDB](https://img.shields.io/badge/MongoDB-Mongoose-47A248?logo=mongodb&logoColor=white)](https://www.mongodb.com/)
+[![WebRTC](https://img.shields.io/badge/WebRTC-P2P-333333?logo=webrtc&logoColor=white)](https://webrtc.org/)
+[![License](https://img.shields.io/badge/license-ISC-blue.svg)](backend/package.json)
 
-- Peer-to-peer audio and video meetings
-- Meeting chat, polls, decisions, reactions, and hand raises
-- Waiting-room admission and meeting ownership
-- Face-enrollment and face-verification attendance
-- Browser-local live transcription shared with all meeting participants
-- AI meeting summaries, action items, and thread memory
-- Meeting history, attendance reports, transcript retrieval, and analytics
+</div>
 
-This README describes the implementation that exists in this repository. It intentionally calls out browser and provider limitations instead of promising functionality that the current architecture cannot guarantee.
+MeetSync AI is a full-stack meeting platform built with React, Express, Socket.IO, WebRTC, and MongoDB. It combines peer-to-peer video meetings with waiting-room admission, room collaboration, face-based attendance, browser-local transcription, extractive or optional OpenAI summaries, action items, cross-meeting memory, history, and attendance analytics.
 
----
+> [!IMPORTANT]
+> Speech recognition is performed in each participant's browser. The backend receives transcript text, then validates, deduplicates, broadcasts, and persists it; it does not currently receive or centrally transcribe a mixed meeting audio stream.
 
-## Contents
+## 📚 Table of Contents
 
-1. [Architecture at a glance](#architecture-at-a-glance)
-2. [Feature overview](#feature-overview)
-3. [Technology stack](#technology-stack)
-4. [Repository structure](#repository-structure)
-5. [How a meeting works](#how-a-meeting-works)
-6. [Transcription design](#transcription-design)
-7. [Attendance design](#attendance-design)
-8. [Frontend routes](#frontend-routes)
-9. [Backend REST API](#backend-rest-api)
-10. [Socket.IO events](#socketio-events)
-11. [Data models](#data-models)
-12. [Requirements](#requirements)
-13. [Environment configuration](#environment-configuration)
-14. [Local development](#local-development)
-15. [Testing and builds](#testing-and-builds)
-16. [Production deployment](#production-deployment)
-17. [Troubleshooting](#troubleshooting)
-18. [Known limitations and security notes](#known-limitations-and-security-notes)
+- [✨ Features](#-features)
+- [🖼️ Screenshots](#️-screenshots)
+- [🏗️ System Architecture](#️-system-architecture)
+- [🔄 How It Works](#-how-it-works)
+- [🎤 Transcription Design](#-transcription-design)
+- [🧑‍💻 Attendance Design](#-attendance-design)
+- [🧠 AI Summary, Action Items and Thread Memory](#-ai-summary-action-items-and-thread-memory)
+- [🗃️ Data Models](#️-data-models)
+- [🧰 Tech Stack](#-tech-stack)
+- [🗂️ Project Structure](#️-project-structure)
+- [🧭 Frontend Routes](#-frontend-routes)
+- [🌐 REST API Reference](#-rest-api-reference)
+- [🔌 Socket.IO Events Reference](#-socketio-events-reference)
+- [🚀 Getting Started](#-getting-started)
+- [🧪 Testing](#-testing)
+- [☁️ Production Deployment](#️-production-deployment)
+- [🛠️ Troubleshooting](#️-troubleshooting)
+- [🔐 Known Limitations, Security and Privacy](#-known-limitations-security-and-privacy)
+- [🗺️ Roadmap](#️-roadmap)
+- [🤝 Contributing](#-contributing)
+- [📄 License](#-license)
 
----
+## ✨ Features
 
-## Architecture at a glance
+| Area | Included behavior |
+|---|---|
+| Video meetings | Peer-to-peer camera and microphone meetings using WebRTC |
+| Admission | Meeting owner assignment, waiting room, approval and rejection |
+| Collaboration | Room chat, polls, voting, decisions, reactions, hand raising, and screen-share state |
+| Attendance | Face enrollment, periodic browser verification, live owner updates, and final attendance reports |
+| Transcription | Web Speech API, Transformers.js Whisper fallback, manual entry, room-wide transcript broadcast, replay, and persistence |
+| Meeting intelligence | Extractive summaries, optional OpenAI summaries, decisions, risks, next steps, and action items |
+| Thread memory | Cross-meeting summaries, pending actions, decisions, participant sets, and previous-meeting context |
+| History and analytics | Meeting history, transcript retrieval, attendance history, and Recharts analytics |
 
-```text
-                         Browser
-             React SPA + WebRTC + Socket.IO client
-                    /         |         \
-                   /          |          \
-        REST API requests   signaling   room events
-                 |             |             |
-                 +-------------+-------------+
-                               |
-                 Express + Socket.IO backend
-                    |             |          \
-                    |             |           \
-                REST routes    room state    AI services
-                    |             |             |
-                    +-------------+-------------+
-                                  |
-                          MongoDB via Mongoose
+## 🖼️ Screenshots
+
+The following paths are placeholders for screenshots that can be added later.
+
+| Screen | Placeholder |
+|---|---|
+| Landing page | `docs/screenshots/landing-page.png` |
+| Meeting room | `docs/screenshots/meeting-room.png` |
+| Transcript and summary | `docs/screenshots/transcript-summary.png` |
+| Attendance analytics | `docs/screenshots/attendance-analytics.png` |
+
+> [!NOTE]
+> The screenshot paths above are documentation placeholders; the image files are not currently included in the repository.
+
+## 🏗️ System Architecture
+
+### High-level architecture
+
+```mermaid
+flowchart TB
+    subgraph Client["Browser client"]
+        SPA["React SPA"]
+        WEBRTC["WebRTC media"]
+        SOCKET["Socket.IO client"]
+        FACE["face-api face detection"]
+        SPEECH["Web Speech API"]
+        WHISPER["Transformers.js Whisper fallback"]
+        SPA --> WEBRTC
+        SPA --> SOCKET
+        SPA --> FACE
+        SPA --> SPEECH
+        SPA --> WHISPER
+    end
+
+    subgraph Backend["Node.js backend"]
+        REST["Express REST routes"]
+        MANAGER["Socket.IO socketManager"]
+        ROOM["In-memory room state"]
+        SUMMARY["Summary and action-item engine"]
+        REST --> MANAGER
+        MANAGER --> ROOM
+        MANAGER --> SUMMARY
+    end
+
+    DB[("MongoDB")]
+    OPENAI["Optional OpenAI API"]
+    STUN["Google STUN servers"]
+
+    SOCKET --> MANAGER
+    SPA --> REST
+    WEBRTC -. "P2P media negotiation" .-> SOCKET
+    WEBRTC -. "ICE discovery" .-> STUN
+    FACE --> MANAGER
+    SPEECH --> MANAGER
+    WHISPER --> MANAGER
+    ROOM --> DB
+    SUMMARY --> DB
+    SUMMARY -. "optional provider" .-> OPENAI
+    DB --- USERS["Users"]
+    DB --- MEETINGS["Meetings"]
+    DB --- ATTENDANCE["Attendance"]
+    DB --- FACES["Faces"]
+    DB --- TRANSCRIPTS["Transcripts"]
+    DB --- ACTIONS["ActionItems"]
+    DB --- MEMORY["ThreadMemory"]
 ```
 
-### Frontend
+This diagram shows browser responsibilities, real-time and REST boundaries, active room state, persistence, optional OpenAI summaries, and STUN-assisted WebRTC discovery.
 
-The React application in `frontend/` handles:
+### Frontend module relationships
 
-- Routing and authentication state
-- Camera and microphone permission requests
-- WebRTC peer connections and media controls
-- Socket.IO room communication
-- Face detection and face enrollment in the browser
-- Browser-local transcription and its local fallback
-- Meeting, attendance, history, analytics, summary, and collaboration UI
+```mermaid
+flowchart TB
+    APP["App.js"] --> ROUTER["React Router"]
+    APP --> AUTH["AuthProvider"]
+    ROUTER --> LANDING["landing.jsx"]
+    ROUTER --> LOGIN["authentication.jsx"]
+    ROUTER --> HOME["home.jsx"]
+    ROUTER --> HISTORY["history.jsx"]
+    ROUTER --> ATT_HISTORY["AttendanceHistory.jsx"]
+    ROUTER --> ATT_ANALYTICS["AttendanceAnalytics.jsx"]
+    ROUTER --> GUEST["GuestJoin.jsx"]
+    ROUTER --> MEET["VideoMeet.jsx"]
+    AUTH --> LOGIN
+    AUTH --> HOME
+    AUTH --> HISTORY
+    AUTH --> MEET
+    MEET --> SOCKET_CLIENT["Socket.IO client"]
+    MEET --> MEDIA["WebRTC and media APIs"]
+    MEET --> ATTENDANCE_CLIENT["face-api attendance"]
+    MEET --> TRANSCRIPT_CLIENT["Web Speech, Whisper, and manual entry"]
+```
 
-The main meeting implementation is [`frontend/src/pages/VideoMeet.jsx`](frontend/src/pages/VideoMeet.jsx).
+This diagram shows the React entrypoint, global authentication context, route-level pages, and the central meeting component.
 
-### Backend
+### Deployment topology
 
-The Express application in `backend/` handles:
+```mermaid
+flowchart LR
+    BROWSER["Participant browser"]
+    PROXY["HTTPS reverse proxy<br/>WebSocket upgrade"]
+    NODE["Node.js server<br/>Express + Socket.IO"]
+    BUILD["frontend/build"]
+    MONGO[("MongoDB")]
+    TURN["Optional TURN server"]
 
-- User and meeting-history REST endpoints
-- Attendance and transcript retrieval
-- Action-item and thread-memory retrieval
-- Socket.IO room admission and waiting-room approval
-- WebRTC signaling relay
-- Room-scoped chat and collaboration events
-- Transcript validation, deduplication, broadcast, replay, and persistence
-- Meeting-end attendance reports and summary generation
+    BROWSER -->|"HTTPS and WebSocket"| PROXY
+    PROXY --> NODE
+    NODE --> BUILD
+    NODE --> MONGO
+    BROWSER -. "WebRTC fallback when needed" .-> TURN
+```
 
-The server entrypoint is [`backend/src/app.js`](backend/src/app.js). Socket behavior is concentrated in [`backend/src/controllers/socketManager.js`](backend/src/controllers/socketManager.js).
+This diagram shows the provider-neutral production topology and the optional TURN dependency needed by restrictive networks.
 
-### MongoDB
+## 🔄 How It Works
 
-MongoDB stores users, meeting history, attendance reports, face descriptors, transcripts, action items, and thread memory. In-memory Socket.IO state is used while a meeting is active; completed records are persisted when the relevant meeting actions occur.
+### Join meeting and admission flow
 
----
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant S as Socket server
+    participant O as Owner client
 
-## Feature overview
+    C->>S: join-call(path, userId, userName, isOwner)
+    alt First or declared owner
+        S-->>C: you-are-owner
+        S->>S: Add owner to room
+    else No owner yet
+        S->>S: Add client to pendingQueue
+        S-->>C: waiting-for-approval
+        S-->>O: join-request
+        O->>S: approve-join(meetingId, requesterSocketId)
+        S->>S: Move client into room
+    else Existing meeting link
+        S->>S: Add client to room
+    end
+    S-->>C: user-joined
+    S-->>O: user-joined
+    S-->>C: participant-list
+    S-->>C: chat-message history
+    S-->>C: transcript-entry history
+```
 
-### Video meetings
+This sequence shows owner selection, pending users, approval, room admission, participant updates, and late-join history replay.
 
-- WebRTC peer-to-peer audio/video
-- Multi-participant room layout
-- Camera and microphone controls
-- Screen sharing
-- Socket.IO signaling for SDP and ICE candidates
-- Automatic peer cleanup when participants leave
+### WebRTC signaling
 
-The backend relays signaling messages; media is intended to flow directly between browsers.
+```mermaid
+sequenceDiagram
+    participant A as Browser A
+    participant S as Socket.IO server
+    participant B as Browser B
 
-### Meeting admission
+    A->>A: Create RTCPeerConnection
+    A->>A: Create SDP offer
+    A->>S: signal(B, offer)
+    S->>B: signal(A, offer)
+    B->>B: Set remote offer
+    B->>B: Create SDP answer
+    B->>S: signal(A, answer)
+    S->>A: signal(B, answer)
+    A->>S: signal(B, ICE candidate)
+    S->>B: signal(A, ICE candidate)
+    B->>S: signal(A, ICE candidate)
+    S->>A: signal(B, ICE candidate)
+    A-->>B: P2P audio and video
+```
 
-- The first participant becomes the meeting owner.
-- The owner can approve or reject waiting participants.
-- Valid meeting-link participants are admitted by the current server flow.
-- Participant lists are broadcast to the room.
-- Late joiners receive relevant chat and transcript history.
+This sequence shows the backend relaying SDP and ICE messages while media is intended to flow directly between browsers.
 
-### Collaboration
+### Participant status
 
-Meetings support:
+```mermaid
+stateDiagram-v2
+    [*] --> Lobby
+    Lobby --> Waiting: join-call without owner
+    Lobby --> Admitted: owner or existing meeting link
+    Waiting --> Admitted: approve-join
+    Waiting --> Rejected: reject-join
+    Admitted --> InMeeting: user-joined
+    InMeeting --> Left: disconnect or user-left
+    Rejected --> [*]
+    Left --> [*]
+```
 
-- Chat messages with in-memory room history
-- Poll creation and voting
-- Decision recording
-- Emoji reactions
-- Hand raising
-- Participant list updates
-- Screen-share state notifications
+This state diagram describes the participant lifecycle from the pre-join lobby through admission, active participation, rejection, or departure.
 
-### Attendance
+## 🎤 Transcription Design
 
-The owner can enroll a face from the browser camera. During the meeting, the browser periodically compares the current face descriptor with the enrolled descriptor and reports verified time to the server.
+### Pipeline
 
-Attendance status is calculated from verified percentage:
+```mermaid
+flowchart LR
+    START["Admitted participant"] --> WEB["Web Speech API"]
+    WEB -->|"final text"| ENTRY["transcript-entry"]
+    WEB -->|"aborted, network, or unavailable"| FALLBACK["Transformers.js Whisper"]
+    FALLBACK --> ENTRY
+    FALLBACK -->|"model, media, or browser failure"| MANUAL["Manual transcript entry"]
+    MANUAL --> ENTRY
+    ENTRY --> VALIDATE["Server validates room membership and text"]
+    VALIDATE --> DEDUPE["Server deduplicates speaker, text, timestamp"]
+    DEDUPE --> STORE["Room transcript state"]
+    STORE --> BROADCAST["Broadcast transcript-entry to room"]
+    STORE --> PERSIST["Persist transcript on meeting lifecycle"]
+```
 
-- `Present`: at least 75%
-- `Partial`: 50% through 74%
-- `Absent`: below 50%
+This pipeline shows local recognition and fallback paths before the server validates, deduplicates, broadcasts, and persists transcript text.
 
-Attendance data is stored in MongoDB and is available through REST routes and analytics pages.
+### Behavior and boundaries
 
-### Transcription and summaries
+- Transcription starts after an admitted participant receives the room's `user-joined` flow.
+- Web Speech recognition is continuous and accepts final results that pass the component's confidence handling.
+- An unexpected Web Speech interruption switches to the local Transformers.js fallback instead of repeatedly restarting the same recognition instance.
+- The fallback uses `MediaRecorder`, `AudioContext`, and `Xenova/whisper-tiny.en`.
+- Manual entry remains available when both recognition paths fail.
+- The server rejects entries from sockets that are not members of the requested meeting room.
+- Late joiners receive the current in-memory transcript history.
+- The sender receives the same room broadcast as other participants; the client removes duplicate echoes.
 
-- Transcription starts automatically for an admitted participant when the meeting client has microphone access.
-- Chrome/Edge Web Speech recognition is the primary browser engine.
-- A local Transformers.js/Whisper fallback is attempted when the primary engine fails.
-- Manual transcript entry remains available when browser recognition or the local model cannot be used.
-- Each client sends text entries to the server through Socket.IO.
-- The server validates, deduplicates, stores, broadcasts, and replays entries to the whole room, including the sender.
-- Meeting summaries use the merged room transcript.
-- Summaries can produce discussion points, decisions, action items, risks, and next steps.
+> [!WARNING]
+> Browser support, microphone permissions, secure-context rules, speech-service availability, model download size, and device audio configuration can all affect transcription. This architecture cannot guarantee recognition on every browser or device.
 
-Important: the current implementation does **not** send raw microphone audio to the backend for centralized transcription. Speech recognition is performed in each participant's browser.
+## 🧑‍💻 Attendance Design
 
----
+```mermaid
+flowchart LR
+    ENROLL["register-face<br/>descriptor"] --> VERIFY["Periodic browser face verification"]
+    VERIFY --> UPDATE["verified-update<br/>verifiedDelta"]
+    UPDATE --> LIVE["live-attendance to owner"]
+    UPDATE --> END["Owner emits end-meeting"]
+    END --> CALC["Calculate verified percentage"]
+    CALC --> PRESENT["Present: >= 75%"]
+    CALC --> PARTIAL["Partial: 50% to 74%"]
+    CALC --> ABSENT["Absent: < 50%"]
+    PRESENT --> SAVE["Save Attendance report"]
+    PARTIAL --> SAVE
+    ABSENT --> SAVE
+```
 
-## Technology stack
+This flow shows face enrollment, periodic verification, live owner updates, final thresholds, and MongoDB attendance persistence.
 
-### Frontend
+The browser uses `@vladmandic/face-api` to detect a face and compare it with an enrolled descriptor. The server tracks total and verified time for active room participants. At meeting end, only the meeting owner can request the final report.
 
-- React 18
-- React Router 6
-- Socket.IO client
-- WebRTC browser APIs
-- Material UI and Emotion
-- `@vladmandic/face-api` for face detection and descriptors
-- TensorFlow.js runtime packages
-- `@xenova/transformers` for local speech fallback
-- Recharts for analytics
-- Axios for REST requests
+## 🧠 AI Summary, Action Items and Thread Memory
 
-### Backend
+```mermaid
+flowchart LR
+    END["end-meeting"] --> REPORT["Save Attendance report"]
+    END --> TRANSCRIPT["Collect room transcript"]
+    TRANSCRIPT --> GENERATE["generate-summary"]
+    GENERATE --> PROVIDER{"OpenAI key configured?"}
+    PROVIDER -->|"yes"| OPENAI["OpenAI JSON summary"]
+    PROVIDER -->|"no or provider failure"| EXTRACT["Local extractive summary"]
+    OPENAI --> SUMMARY["summary-generated"]
+    EXTRACT --> SUMMARY
+    SUMMARY --> ACTIONS["Save and load ActionItems"]
+    SUMMARY --> MEMORY["save-thread-memory"]
+    ACTIONS --> HISTORY["Meeting history"]
+    MEMORY --> HISTORY
+    SUMMARY --> HISTORY
+```
 
-- Node.js with ES modules
-- Express 4
-- Socket.IO 4
-- Mongoose 8
-- MongoDB
-- bcrypt for password hashing
-- OpenAI SDK for optional AI summaries
-- Jest and Supertest for tests
+This flow shows how meeting end and explicit summary generation produce attendance, summary, action-item, thread-memory, and history data.
 
-### Browser APIs
+The summary shape includes:
 
-- `getUserMedia` for camera and microphone
-- `getDisplayMedia` for screen sharing
-- `RTCPeerConnection` for media transport
-- Web Speech API when available
-- `MediaRecorder` and `AudioContext` for the local transcription fallback
+- `executiveSummary`
+- `keyDiscussionPoints`
+- `decisionsTaken`
+- `actionItems`
+- `risks`
+- `nextSteps`
 
-Exact dependency versions are maintained in [`frontend/package.json`](frontend/package.json) and [`backend/package.json`](backend/package.json).
+When `OPENAI_API_KEY` is usable, the server requests structured JSON from `gpt-3.5-turbo`. Otherwise, or when the provider request fails, the server uses its local keyword and sentence-scoring extraction.
 
----
+## 🗃️ Data Models
 
-## Repository structure
+### Entity relationships
+
+```mermaid
+erDiagram
+    USER {
+        string name
+        string username UK
+        string password
+        string token
+    }
+    MEETING {
+        string user_id
+        string meetingCode
+        string meetingOwner
+        string title
+        object summary
+        string summaryPreview
+        date endedAt
+        date date
+    }
+    ATTENDANCE {
+        string meetingId
+        string meetingOwner
+        date startTime
+        date endTime
+        date date
+    }
+    FACE {
+        string userId
+        string meetingId
+        number descriptor
+    }
+    TRANSCRIPT {
+        string meetingId UK
+        object entries
+        object summary
+        date createdAt
+    }
+    ACTION_ITEM {
+        string meetingId
+        string meetingOwner
+        string task
+        string assignedTo
+        date dueDate
+        string status
+        date createdAt
+    }
+    THREAD_MEMORY {
+        string threadId UK
+        string meetingCodes
+        object participantSets
+        string summary
+        object pendingActionItems
+        object pastDecisions
+        string patterns
+        date lastMeetingEnded
+        date createdAt
+        date updatedAt
+    }
+    USER ||--o{ MEETING : joins
+    MEETING ||--o| ATTENDANCE : produces
+    MEETING ||--o{ FACE : enrolls
+    MEETING ||--o| TRANSCRIPT : stores
+    MEETING ||--o{ ACTION_ITEM : contains
+    MEETING }o--o{ THREAD_MEMORY : contributes
+```
+
+This ER diagram summarizes the Mongoose collections and the application-level relationships formed through meeting codes, usernames, and thread IDs.
+
+| Model | Important fields | Purpose |
+|---|---|---|
+| `User` | `name`, unique `username`, bcrypt `password`, `token` | Login account and session token storage |
+| `Meeting` | `meetingCode`, owner, participants, summary, dates | Meeting history and summary |
+| `Attendance` | meeting owner, participant timing, verified percentage, status | Final attendance report |
+| `Face` | user ID, meeting ID, numeric descriptor | Per-meeting face enrollment |
+| `Transcript` | unique meeting ID, entries, optional summary | Persisted transcript |
+| `ActionItem` | meeting ID, task, assignee, due date, status | Pending/completed meeting tasks |
+| `ThreadMemory` | thread ID, meeting codes, participant sets, decisions, patterns | Cross-meeting context |
+
+Active rooms, messages, polls, decisions, waiting users, raised hands, and transcripts are also held in process memory by `socketManager.js` while a server process is running.
+
+## 🧰 Tech Stack
+
+| Layer | Technologies |
+|---|---|
+| Frontend | React 18, React Router 6, Material UI, Emotion, Framer Motion |
+| Realtime | Socket.IO client/server, WebRTC |
+| Backend | Node.js ES modules, Express 4 |
+| Persistence | MongoDB with Mongoose 8 |
+| Attendance | `@vladmandic/face-api`, TensorFlow.js |
+| Transcription | Web Speech API, `MediaRecorder`, `AudioContext`, Transformers.js Whisper |
+| Charts | Recharts |
+| HTTP | Axios |
+| AI provider | OpenAI SDK, optional |
+| Testing | Jest, Supertest, Testing Library |
+| Development | Nodemon, Create React App |
+
+## 🗂️ Project Structure
 
 ```text
 MeetSync-AI/
 ├── backend/
 │   ├── src/
-│   │   ├── app.js
+│   │   ├── __tests__/
 │   │   ├── controllers/
 │   │   │   ├── socketManager.js
 │   │   │   └── user.controller.js
 │   │   ├── models/
 │   │   ├── routes/
-│   │   └── __tests__/
+│   │   └── app.js
 │   ├── package.json
 │   └── jest.config.mjs
 ├── frontend/
 │   ├── public/
 │   ├── src/
-│   │   ├── App.js
-│   │   ├── contexts/
 │   │   ├── components/
+│   │   ├── contexts/
 │   │   ├── pages/
 │   │   ├── styles/
-│   │   └── utils/
+│   │   ├── utils/
+│   │   ├── App.js
+│   │   └── environment.js
 │   └── package.json
 ├── start-all.js
 ├── package.json
 └── README.md
 ```
 
-Generated directories such as `frontend/build`, dependency directories, and runtime uploads are not source code and should not be committed as application logic.
+Runtime recordings under `backend/uploads/recordings/`, dependency directories, and build output are not source modules.
 
----
+## 🧭 Frontend Routes
 
-## How a meeting works
+Routes are defined in [`frontend/src/App.js`](frontend/src/App.js).
 
-### 1. Application entry and routing
-
-[`frontend/src/App.js`](frontend/src/App.js) wraps the application in `BrowserRouter` and `AuthProvider`. It exposes public pages, authenticated pages, the guest join flow, and the dynamic meeting route.
-
-### 2. Media preparation
-
-`VideoMeet.jsx` requests camera and microphone access before connecting to Socket.IO. The local stream is attached to the local video element and added to new peer connections.
-
-If full camera/microphone access fails, the client attempts a video-only stream. Meeting access is not intended to depend on face recognition or transcription succeeding.
-
-### 3. Socket connection and room admission
-
-The client connects to the backend Socket.IO server and registers room listeners before emitting `join-call`. This ordering matters because the server can immediately replay room history.
-
-The backend:
-
-1. Creates or finds the meeting room.
-2. Assigns the first owner.
-3. Places waiting participants in the waiting room when approval is required.
-4. Adds admitted participants to the Socket.IO room.
-5. Broadcasts participant state.
-6. Replays available chat and transcript history to the joining socket.
-
-### 4. WebRTC negotiation
-
-When a participant joins, clients create peer connections for other sockets. The client sends SDP offers/answers and ICE candidates through the backend `signal` event. The backend forwards those messages to the addressed socket.
-
-The backend does not mix or store the media stream.
-
-### 5. Meeting activity
-
-Chat, polls, decisions, reactions, hand raises, screen-share state, attendance updates, and transcript entries use room-scoped Socket.IO events.
-
-### 6. Meeting end
-
-The owner can end the meeting. The backend calculates and persists attendance, generates or extracts a summary from transcript content, persists meeting history, and emits reports/summary events to the relevant clients.
-
----
-
-## Transcription design
-
-### Client lifecycle
-
-For each admitted participant:
-
-1. The client starts transcription automatically when the participant is in the room.
-2. Web Speech recognition is attempted when the browser exposes `SpeechRecognition` or `webkitSpeechRecognition`.
-3. Final recognized text is attributed to the participant's display name.
-4. The local UI displays the entry and emits `transcript-entry`.
-5. If Web Speech ends unexpectedly, the failed instance is detached and is not placed into a restart loop.
-6. The Transformers.js/Whisper fallback may record local audio chunks and emit recognized text.
-7. If local engines fail, the user can add an entry manually.
-
-### Server lifecycle
-
-The server accepts a transcript entry only when:
-
-- The meeting ID is present.
-- The socket belongs to the requested meeting room.
-- Text is a non-empty string.
-
-The server normalizes speaker, language, and timestamp values, deduplicates matching entries, stores the entry in active room state, and broadcasts it with:
-
-```text
-io.to(meetingId).emit("transcript-entry", entry)
-```
-
-This includes the sender, which allows every participant to use the same room event path. The frontend deduplicates the sender echo.
-
-### Limitations
-
-Browser-local recognition depends on:
-
-- Browser support
-- Secure context requirements outside localhost
-- Microphone permission
-- Device audio configuration
-- Browser speech-service availability
-- Local model download and decoding capability
-
-For a browser-independent transcription guarantee, the architecture would need server-side audio ingestion and a centralized transcription provider or server-hosted model. That is not part of this repository's current implementation.
-
----
-
-## Attendance design
-
-Attendance has two browser/server stages:
-
-1. **Enrollment:** the participant captures a face descriptor and sends it to the server with `register-face`.
-2. **Verification:** the browser periodically compares a live frame with the enrolled descriptor and sends `verified-update`.
-
-The owner receives live attendance updates. At meeting end, the server creates an attendance report with:
-
-- Meeting ID and owner
-- Participant IDs and names
-- Total time
-- Verified time
-- Verified percentage
-- Present/Partial/Absent status
-- Start and end timestamps
-
-Face descriptors and attendance records are MongoDB data and should be treated as sensitive information.
-
----
-
-## Frontend routes
-
-Routes are defined in [`frontend/src/App.js`](frontend/src/App.js):
-
-| Route | Page | Purpose |
+| Route | Component | Access and purpose |
 |---|---|---|
-| `/` | Landing page | Public product entry page |
-| `/auth` | Authentication | Login and registration |
-| `/home` | Home dashboard | Create or join meetings for authenticated users |
-| `/history` | History | Past meeting history |
-| `/attendance-history` | Attendance history | Attendance records |
-| `/attendance-analytics` | Attendance analytics | Charts and attendance analysis |
-| `/join` | Guest join | Join with a meeting code or URL |
-| `/:url` | Video meeting | Dynamic meeting room identified by URL segment |
+| `/` | `LandingPage` | Public landing page |
+| `/auth` | `Authentication` | Login and registration |
+| `/home` | `HomeComponent` | Dashboard for creating and joining meetings |
+| `/history` | `History` | Authenticated meeting history |
+| `/attendance-history` | `AttendanceHistory` | Attendance records |
+| `/attendance-analytics` | `AttendanceAnalytics` | Attendance charts and analysis |
+| `/join` | `GuestJoin` | Public meeting-code or URL join flow |
+| `/:url` | `VideoMeetComponent` | Dynamic meeting room |
 
-The dynamic meeting route should be kept after the more specific routes because it matches arbitrary path segments.
+The dynamic route is declared after the more specific routes so it does not consume `/home`, `/history`, or other named pages.
 
----
+## 🌐 REST API Reference
 
-## Backend REST API
+The backend mounts these routes in [`backend/src/app.js`](backend/src/app.js). `Auth` below describes the authorization behavior implemented by the route, not a future policy.
 
-The backend listens on port `8000` by default. Routes are mounted in [`backend/src/app.js`](backend/src/app.js).
+### Health and users
 
-### Health
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| `GET` | `/api/health` | None | Return server health and configured port |
+| `POST` | `/api/v1/users/register` | None | Create a bcrypt-hashed user account |
+| `POST` | `/api/v1/users/login` | None | Validate credentials and create a session token |
+| `GET` | `/api/v1/users/get_all_activity` | Token | Return meetings associated with the token's user |
+| `POST` | `/api/v1/users/add_to_activity` | Token in body | Add or update a meeting-history record |
+| `GET` | `/api/v1/users/meeting/:meetingCode` | Token | Return an authorized meeting, summary, and transcript |
 
-```text
-GET /api/health
-```
+<details>
+<summary>Attendance and transcript routes</summary>
 
-Returns a simple server health response and the configured port.
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| `GET` | `/api/v1/attendance/owner/:userId` | None in route | List up to 50 reports matching the owner query |
+| `GET` | `/api/v1/attendance/meeting/:meetingId` | None in route | Return the latest report for a meeting |
+| `GET` | `/api/v1/attendance/user/:userId` | None in route | Return participant-specific attendance data |
+| `GET` | `/api/v1/attendance/transcript/:meetingId` | None in route | Return a persisted transcript |
 
-### Users and meeting history
+</details>
 
-Base path: `/api/v1/users`
+<details>
+<summary>Action-item and thread-memory routes</summary>
 
-| Method | Path | Purpose |
-|---|---|---|
-| `POST` | `/login` | Authenticate a user |
-| `POST` | `/register` | Create a user account |
-| `POST` | `/add_to_activity` | Add meeting activity/history |
-| `GET` | `/get_all_activity` | Retrieve user meeting history |
-| `GET` | `/meeting/:meetingCode` | Retrieve meeting details |
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| `GET` | `/api/v1/action-items/meeting/:meetingId` | None in route | List action items for a meeting |
+| `PATCH` | `/api/v1/action-items/:id/toggle` | None in route | Toggle `pending` and `completed` |
+| `GET` | `/api/v1/memory/thread/:meetingCode` | None in route | Return matching thread-memory context |
 
-### Attendance and transcripts
+</details>
 
-Base path: `/api/v1/attendance`
+> [!WARNING]
+> Attendance, action-item, and thread-memory REST routes currently do not perform a token or ownership check. Add authorization middleware before exposing these routes to untrusted users.
 
-| Method | Path | Purpose |
-|---|---|---|
-| `GET` | `/owner/:userId` | Attendance reports associated with an owner |
-| `GET` | `/meeting/:meetingId` | Attendance report for one meeting |
-| `GET` | `/user/:userId` | Attendance records for one participant |
-| `GET` | `/transcript/:meetingId` | Persisted transcript for one meeting |
+## 🔌 Socket.IO Events Reference
 
-### Action items
+The Socket.IO server is configured in [`backend/src/controllers/socketManager.js`](backend/src/controllers/socketManager.js). Direction is relative to the browser client.
 
-Base path: `/api/v1/action-items`
-
-| Method | Path | Purpose |
-|---|---|---|
-| `GET` | `/meeting/:meetingId` | List action items for a meeting |
-| `PATCH` | `/:id/toggle` | Toggle an action item between pending and completed |
-
-### Thread memory
-
-Base path: `/api/v1/memory`
-
-| Method | Path | Purpose |
-|---|---|---|
-| `GET` | `/thread/:meetingCode` | Retrieve matching previous-meeting context |
-
-Responses generally use a shape containing `success`, optional `count`, and `data` or `message`.
-
----
-
-## Socket.IO events
-
-Socket events are implemented in [`backend/src/controllers/socketManager.js`](backend/src/controllers/socketManager.js) and consumed by `VideoMeet.jsx`.
-
-### Admission and signaling
+### Room admission and WebRTC
 
 | Event | Direction | Purpose |
 |---|---|---|
-| `join-call` | client -> server | Request room admission |
-| `you-are-owner` | server -> client | Identify the meeting owner |
-| `waiting-for-approval` | server -> client | Place a participant in the waiting room |
-| `join-request` | server -> owner | Notify the owner of a pending participant |
-| `approve-join` | client -> server | Approve a waiting participant |
-| `reject-join` | client -> server | Reject a waiting participant |
-| `join-rejected` | server -> client | Notify a rejected participant |
-| `user-joined` | server -> room | Broadcast room socket membership |
-| `user-left` | server -> room | Notify the room of a departure |
-| `participant-list` | server -> room | Broadcast participant metadata |
-| `signal` | both directions | Relay SDP and ICE signaling |
+| `join-call` | Client → server | Request admission with meeting path, user ID, name, and owner flag |
+| `you-are-owner` | Server → client | Confirm owner assignment |
+| `waiting-for-approval` | Server → client | Tell a participant to wait |
+| `join-request` | Server → owner | Notify the owner about a pending participant |
+| `approve-join` | Client → server | Admit a waiting socket |
+| `reject-join` | Client → server | Reject a waiting socket |
+| `join-rejected` | Server → client | Notify the rejected participant |
+| `user-joined` | Server → room member | Share a joined socket ID and client list |
+| `user-left` | Server → room | Notify clients that a socket left |
+| `participant-list` | Server → room | Broadcast participant metadata |
+| `signal` | Client ↔ server | Relay SDP and ICE payloads |
 
-### Chat and collaboration
+<details>
+<summary>Collaboration and screen-share events</summary>
 
-| Event | Purpose |
-|---|---|
-| `chat-message` | Send and replay room chat |
-| `create-poll` | Create a room poll |
-| `poll-created` | Broadcast a new poll |
-| `vote-poll` | Submit a vote |
-| `poll-updated` | Broadcast updated poll results |
-| `add-decision` | Record a meeting decision |
-| `decision-added` | Broadcast a decision |
-| `send-reaction` | Send an emoji reaction |
-| `reaction-received` | Broadcast a reaction |
-| `raise-hand` | Change hand-raise state |
-| `hand-raise-update` | Broadcast raised hands |
-| `screen-share-started` | Notify peers of screen sharing |
-| `screen-share-stopped` | Notify peers that screen sharing ended |
+| Event | Direction | Purpose |
+|---|---|---|
+| `chat-message` | Client ↔ server | Send and replay room chat |
+| `create-poll` | Client → server | Create a poll |
+| `poll-created` | Server → room | Broadcast a new poll |
+| `vote-poll` | Client → server | Vote for an option |
+| `poll-updated` | Server → room | Broadcast updated votes |
+| `add-decision` | Client → server | Add a decision |
+| `decision-added` | Server → room | Broadcast a decision |
+| `send-reaction` | Client → server | Send a reaction |
+| `reaction-received` | Server → room | Broadcast a reaction |
+| `raise-hand` | Client → server | Set a participant's raised-hand state |
+| `hand-raise-update` | Server → room | Broadcast raised hands |
+| `screen-share-started` | Client → server / server → room | Announce screen sharing |
+| `screen-share-stopped` | Client → server / server → room | Announce its end |
 
-### Attendance
+</details>
 
-| Event | Purpose |
-|---|---|
-| `register-face` | Store a participant face descriptor for a meeting |
-| `face-registered` | Confirm face registration |
-| `verified-update` | Report verified attendance time |
-| `live-attendance` | Broadcast live attendance data |
-| `end-meeting` | End a meeting as owner |
-| `attendance-report` | Broadcast the final report |
-| `owner-attendance-report` | Send the owner-specific report |
+<details>
+<summary>Attendance events</summary>
 
-### Transcripts and AI
+| Event | Direction | Purpose |
+|---|---|---|
+| `register-face` | Client → server | Store a face descriptor for a meeting |
+| `face-registered` | Server → client | Confirm descriptor storage |
+| `verified-update` | Client → server | Report verified attendance delta |
+| `live-attendance` | Server → owner | Send live participant timing |
+| `end-meeting` | Client → server | Owner-only finalization request |
+| `attendance-report` | Server → room | Broadcast final report |
+| `owner-attendance-report` | Server → owner | Send owner report |
 
-| Event | Purpose |
-|---|---|
-| `transcript-entry` | Validate, deduplicate, store, replay, and broadcast transcript text |
-| `generate-summary` | Generate a summary from merged transcript entries |
-| `summary-generated` | Broadcast the summary |
-| `get-action-items` | Request meeting action items |
-| `action-items-list` | Return action items |
-| `toggle-action-item` | Toggle an action item |
-| `action-item-updated` | Broadcast an updated action item |
-| `save-thread-memory` | Persist cross-meeting context |
-| `get-thread-memory` | Request prior thread memory |
-| `thread-memory-result` | Return prior thread memory |
-| `get-meeting-context` | Request previous meeting context |
-| `meeting-context-result` | Return previous meeting context |
+</details>
 
----
+<details>
+<summary>Transcription, summary, action-item, and memory events</summary>
 
-## Data models
+| Event | Direction | Purpose |
+|---|---|---|
+| `transcript-entry` | Client ↔ server | Validate, deduplicate, store, replay, and broadcast text |
+| `generate-summary` | Client → server | Request a merged transcript summary |
+| `summary-generated` | Server → room | Broadcast summary result |
+| `get-action-items` | Client → server | Request persisted action items |
+| `action-items-list` | Server → client | Return action items |
+| `toggle-action-item` | Client → server | Toggle an action item |
+| `action-item-updated` | Server → room | Broadcast item changes |
+| `save-thread-memory` | Client → server | Save cross-meeting context |
+| `get-thread-memory` | Client → server | Request thread memory |
+| `thread-memory-result` | Server → client | Return thread memory |
+| `get-meeting-context` | Client → server | Request previous meeting context |
+| `meeting-context-result` | Server → client | Return previous meeting context |
 
-Mongoose models are in [`backend/src/models`](backend/src/models).
+</details>
 
-| Model | Main purpose |
-|---|---|
-| `User` | Name, username, bcrypt password hash, session token |
-| `Meeting` | Meeting history, participants, summary, dates |
-| `Attendance` | Meeting attendance report and participant percentages |
-| `Face` | Per-user, per-meeting face descriptor |
-| `Transcript` | Unique meeting transcript entries and summary |
-| `ActionItem` | Meeting task, assignee, due date, and status |
-| `ThreadMemory` | Cross-meeting summaries, pending tasks, decisions, and participant sets |
+## 🚀 Getting Started
 
-The active Socket.IO room state is separate from MongoDB persistence. A process restart can therefore remove in-memory active-room state that has not yet been persisted.
-
----
-
-## Requirements
+### Prerequisites
 
 - Node.js 18 or newer
 - npm
-- MongoDB connection string
-- A modern browser for WebRTC
-- HTTPS for deployed camera/microphone access
-- Optional OpenAI API key for provider-backed summaries
+- MongoDB
+- A modern browser with WebRTC support
+- HTTPS for deployed camera and microphone access
 
-`localhost` is treated as a valid development origin for browser media APIs. Deployed environments should use HTTPS.
+### Install
 
----
+From the repository root:
 
-## Environment configuration
+```powershell
+cd backend
+npm install
+cd ..\frontend
+npm install
+cd ..
+```
+
+### Configure the backend
 
 Create `backend/.env`:
 
 ```env
 PORT=8000
 MONGO_URI=mongodb://127.0.0.1:27017/meetsync
-# Optional:
-OPENAI_API_KEY=your_openai_key
+OPENAI_API_KEY=your_openai_api_key_here
 FRONTEND_URL=http://localhost:3000
+NODE_ENV=development
 ```
+
+`OPENAI_API_KEY` is optional. Leave it unset or use the placeholder to use the local summary path.
+
+### Configure the frontend
 
 Create `frontend/.env`:
 
@@ -527,40 +643,16 @@ Create `frontend/.env`:
 REACT_APP_BACKEND_URL=http://localhost:8000
 ```
 
-### Configuration notes
+The shared frontend environment module defaults to `http://localhost:8000` when this variable is absent.
 
-- `PORT` controls the backend HTTP/Socket.IO port and defaults to `8000`.
-- `MONGO_URI` is required for normal backend startup.
-- `OPENAI_API_KEY` is optional. Without a usable key, the server uses its non-provider summary path where implemented.
-- `FRONTEND_URL` adds an allowed frontend origin to backend CORS configuration.
-- Do not commit `.env` files, API keys, MongoDB credentials, or user data.
-
----
-
-## Local development
-
-### Install dependencies
-
-From the repository root:
-
-```powershell
-cd backend
-npm install
-
-cd ..\frontend
-npm install
-```
-
-### Start the backend
+### Run the backend
 
 ```powershell
 cd backend
 npm run dev
 ```
 
-The backend is available at `http://localhost:8000`.
-
-### Start the frontend
+### Run the frontend
 
 In a second terminal:
 
@@ -569,9 +661,9 @@ cd frontend
 npm start
 ```
 
-The frontend is available at `http://localhost:3000`.
+Open `http://localhost:3000`.
 
-### Start both applications
+### Run both applications
 
 From the repository root:
 
@@ -579,169 +671,171 @@ From the repository root:
 node start-all.js
 ```
 
-The root launcher starts the backend and frontend from their actual repository directories. It attempts to clean ports `8000` and `3000` before starting.
+The launcher cleans ports `8000` and `3000`, starts `backend` with `npm run dev`, starts `frontend` with `npm start`, and opens the browser after startup.
 
----
+## 🧪 Testing
 
-## Testing and builds
-
-### Frontend
-
-Run all frontend tests:
+### Frontend tests
 
 ```powershell
 cd frontend
 npx react-scripts test --watchAll=false --runInBand
 ```
 
-Build the production frontend:
+### Frontend production build
 
 ```powershell
 cd frontend
 npm run build
 ```
 
-### Backend
-
-The repository's Windows-compatible Jest command is:
+### Backend tests
 
 ```powershell
 cd backend
 node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand
 ```
 
-The backend `npm test` script is intended for the same Jest setup, but invoking the Node entrypoint directly is more reliable on Windows.
+The backend test suite covers health, authentication/history, attendance, action items, summary extraction, Socket.IO admission/signaling, collaboration, and transcript behavior. Frontend tests cover routes, auth context, meeting interactions, attendance pages, guest joining, transcription lifecycle/fallback, and analytics.
 
-### Current test coverage areas
+## ☁️ Production Deployment
 
-- Authentication and user routes
-- Attendance and transcript routes
-- Action-item routes
-- Health endpoint
-- Summary extraction
-- Socket admission and signaling
-- Chat, polls, voting, decisions, and transcript room behavior
-- Frontend routing and page interactions
-- Transcription lifecycle, fallback, deduplication, and UI
+The backend serves the compiled React application when `NODE_ENV=production`.
 
----
+1. Provision Node.js and MongoDB.
+2. Install backend and frontend dependencies.
+3. Configure the environment variables below using the hosting platform's secret manager.
+4. Build the frontend.
+5. Start the backend over HTTPS behind a reverse proxy.
+6. Configure the proxy to support WebSocket upgrades.
+7. Restrict CORS to the deployed frontend origin.
+8. Add TURN infrastructure if peer-to-peer connections must work through restrictive NATs.
 
-## Production deployment
-
-The backend can serve the compiled frontend when `NODE_ENV=production`:
+Build and start:
 
 ```powershell
 cd frontend
 npm run build
-
 cd ..\backend
-$env:NODE_ENV = "production"
 npm start
 ```
 
-The backend expects the frontend build at `frontend/build`.
+| Variable | Required | Purpose |
+|---|---|---|
+| `PORT` | No | Backend port; defaults to `8000` |
+| `MONGO_URI` | Yes | MongoDB connection string |
+| `OPENAI_API_KEY` | No | Enables OpenAI summary generation |
+| `FRONTEND_URL` | Recommended | Adds the deployed frontend origin to CORS configuration |
+| `REACT_APP_BACKEND_URL` | Recommended | Frontend build-time backend URL |
+| `NODE_ENV` | For production serving | Set to `production` to serve `frontend/build` |
 
-For provider-neutral deployment:
+> [!IMPORTANT]
+> Camera, microphone, WebRTC, and Socket.IO deployment require HTTPS and a proxy that preserves WebSocket upgrades. The current client config includes Google STUN servers but no TURN server.
 
-1. Provision a Node.js runtime compatible with the project.
-2. Provision MongoDB and set `MONGO_URI`.
-3. Build the frontend.
-4. Set `NODE_ENV=production`.
-5. Set `FRONTEND_URL` to the deployed frontend origin.
-6. Expose the backend over HTTPS.
-7. Ensure WebSocket upgrade support is enabled by the reverse proxy.
-8. Keep API keys and database credentials in the hosting provider's secret configuration.
+## 🛠️ Troubleshooting
 
-For separate frontend/backend hosting, set `REACT_APP_BACKEND_URL` to the public backend URL before building the frontend and configure backend CORS accordingly.
+<details>
+<summary>Camera or microphone access fails</summary>
 
----
-
-## Troubleshooting
-
-### The frontend cannot access the microphone or camera
-
-- Use `http://localhost` for local development or HTTPS in deployed environments.
+- Use `http://localhost` locally or HTTPS in a deployed environment.
 - Check browser permission settings.
-- Verify that another application is not holding the camera or microphone.
+- Confirm another application is not using the device.
 - Reload after changing permissions.
-- The application may fall back to video-only access when full media access fails.
+- The meeting client can attempt video-only access when full media access fails.
 
-### Transcription is unavailable
+</details>
+
+<details>
+<summary>Transcription stops or is unavailable</summary>
 
 - Use a browser with Web Speech support for the primary path.
 - Confirm microphone permission.
-- Confirm the meeting page is running in a secure context outside localhost.
-- Wait for the local Transformers model to load when the fallback is used.
-- Use the manual transcript input if browser or model speech recognition is unavailable.
+- Check the browser secure context.
+- Wait for the approximately 70 MB local Whisper model to load.
+- Use manual transcript entry if both local recognition paths fail.
 
-Transcription is generated locally by each participant's browser. The backend relays text entries; it does not currently transcribe a mixed meeting audio stream.
+The repeated Web Speech restart loop is intentionally not used; an interruption causes a controlled switch to the fallback path.
 
-### Participants cannot connect to each other
+</details>
 
-- Confirm both browsers can reach the backend Socket.IO URL.
-- Check that the backend is listening on the configured port.
-- Check WebSocket upgrade support in any reverse proxy.
-- Confirm that camera/microphone permissions were not permanently denied.
-- Inspect browser console logs for SDP, ICE, or signaling errors.
+<details>
+<summary>Participants cannot connect</summary>
 
-The current WebRTC configuration uses a Google STUN server. Some restrictive networks require a TURN server for reliable peer connectivity; a TURN service is not configured in this repository.
+- Confirm both clients can reach `REACT_APP_BACKEND_URL`.
+- Confirm the backend is listening on port `8000` or the configured `PORT`.
+- Verify WebSocket upgrades through the reverse proxy.
+- Check browser console logs for SDP and ICE errors.
+- Consider adding a TURN server for restrictive networks.
 
-### The backend does not start
+</details>
+
+<details>
+<summary>The backend does not start</summary>
 
 - Verify `MONGO_URI` is set and reachable.
-- Check whether port `8000` is already in use.
-- Start the backend from the `backend` directory.
-- Check Node.js and npm versions.
-- Review the startup error before changing application code.
+- Check whether the configured port is already in use.
+- Start from the `backend` directory.
+- Confirm Node.js and npm versions.
+- Inspect the startup error before changing source code.
 
-### A route returns 404
+</details>
 
-- Confirm the correct `/api/v1/...` prefix.
-- Confirm the frontend is calling the backend URL from `REACT_APP_BACKEND_URL`.
-- For client-side routes in production, ensure the server returns `frontend/build/index.html` for non-API paths.
+<details>
+<summary>An API route returns 401, 403, or 404</summary>
 
----
+- Use the exact `/api/v1/...` prefix.
+- Send the login token as the `Authorization` header where the route requires it.
+- `add_to_activity` currently expects the token in the request body.
+- Confirm the meeting code exists and the authenticated user belongs to it.
+- Remember that attendance, action-item, and memory routes currently lack route-level auth checks.
 
-## Known limitations and security notes
+</details>
 
-### Runtime limitations
+## 🔐 Known Limitations, Security and Privacy
 
-- Browser-local speech recognition is not guaranteed on every browser, device, language, or network.
-- The local Whisper fallback downloads and runs a relatively large model in the browser.
-- WebRTC peer-to-peer connectivity may fail on networks that require TURN.
-- Active meeting room state is held in server memory; horizontal scaling requires shared Socket.IO state and a coordinated persistence strategy.
-- Face enrollment and verification require camera access and suitable lighting.
-- AI summaries depend on transcript quality and, when configured, provider availability.
+> [!WARNING]
+> The current CORS callback logs blocked origins but allows them for debugging. Restrict this behavior before production use.
 
-### Security and privacy
+> [!WARNING]
+> The `User` model stores a generated session token in a plain database field and the frontend stores that token in `localStorage`. This is not a replacement for a hardened authentication/session design.
 
-- Passwords are hashed with bcrypt before storage.
-- Do not expose `.env` files or API keys.
-- Face descriptors and transcripts are sensitive meeting data.
-- Review and harden authentication/authorization before exposing the service publicly.
-- The current CORS configuration is permissive for debugging and should be restricted to known frontend origins in production.
-- Validate meeting ownership and participant authorization when adding new API or socket features.
-- Use HTTPS for deployed media, authentication, and Socket.IO traffic.
+> [!WARNING]
+> Attendance, action-item, and thread-memory REST endpoints do not currently verify the caller's identity or ownership. Treat them as development-stage APIs until authorization middleware is added.
 
----
+> [!NOTE]
+> Active room state is process-local. A restart loses unpersisted room messages, participant state, polls, decisions, and transcript state. Multiple backend instances would need shared Socket.IO state and coordinated persistence.
 
-## Useful source locations
+Additional limitations:
 
-| Area | File |
-|---|---|
-| React routes | `frontend/src/App.js` |
-| Main meeting UI | `frontend/src/pages/VideoMeet.jsx` |
-| Auth state | `frontend/src/contexts/AuthContext.jsx` |
-| Backend entrypoint | `backend/src/app.js` |
-| Socket and meeting state | `backend/src/controllers/socketManager.js` |
-| REST routes | `backend/src/routes/` |
-| MongoDB schemas | `backend/src/models/` |
-| Frontend tests | `frontend/src/pages/__tests__/` |
-| Backend tests | `backend/src/__tests__/` |
-| Root launcher | `start-all.js` |
+- Browser-local speech recognition depends on browser APIs, permissions, speech services, and model resources.
+- The application has no configured TURN server, so some NAT and firewall environments will prevent P2P media.
+- Face enrollment and verification require camera access, suitable lighting, and a detectable face.
+- Face descriptors, transcripts, meeting history, and attendance are sensitive data.
+- Optional OpenAI summaries transmit merged transcript text to the configured provider.
+- Authentication is token-based but does not yet provide a complete middleware layer across all routes and sockets.
+- HTTPS is required for secure deployed media and realtime traffic.
 
----
+## 🗺️ Roadmap
 
-## License
+These are realistic follow-up improvements, not claims about current functionality:
 
-The backend package declares the ISC license. Review the repository and package metadata before redistributing or deploying the project.
+- Add a managed TURN server and configurable ICE server environment variables.
+- Add server-side or hosted transcription for browser-independent capture.
+- Replace localStorage session tokens with hardened JWT or secure cookie sessions.
+- Add authentication and ownership middleware to every REST and sensitive Socket.IO operation.
+- Add a Socket.IO Redis adapter and shared state for horizontal scaling.
+- Add retention controls, encryption policies, and explicit consent flows for transcripts and face descriptors.
+- Add automated browser-level meeting tests across supported browsers.
+
+## 🤝 Contributing
+
+1. Create a focused branch.
+2. Keep changes scoped to the feature or fix.
+3. Update tests and documentation when behavior changes.
+4. Run the relevant frontend tests, backend tests, and production build.
+5. Do not commit `.env` files, API keys, recordings, model caches, or personal meeting data.
+6. Open a pull request describing behavior, validation, and any deployment implications.
+
+## 📄 License
+
+The backend package declares the ISC license. Review the package metadata and repository terms before redistributing or deploying the project.
